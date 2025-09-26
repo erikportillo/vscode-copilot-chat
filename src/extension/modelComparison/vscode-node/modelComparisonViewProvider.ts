@@ -8,7 +8,10 @@ import { IEndpointProvider } from '../../../platform/endpoint/common/endpointPro
 import { CancellationTokenSource } from '../../../util/vs/base/common/cancellation';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
+import { ChatRequestCloner } from './chatRequestCloner';
+import { ComparisonChatOrchestrator } from './comparisonChatOrchestrator';
 import { ModelSelectionService } from './modelSelectionService';
+import { ResponseAggregator } from './responseAggregator';
 import { SingleModelChatHandler } from './singleModelChatHandler';
 
 /**
@@ -20,6 +23,9 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 	private readonly modelSelectionService: ModelSelectionService;
 	private readonly singleModelChatHandler: SingleModelChatHandler;
+	private readonly comparisonChatOrchestrator: ComparisonChatOrchestrator;
+	private readonly responseAggregator: ResponseAggregator;
+	private modelMetadataMap: Map<string, { id: string; name: string; family?: string; version?: string; vendor?: string }> = new Map();
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
@@ -32,8 +38,14 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 		// Initialize the model selection service with endpoint provider
 		this.modelSelectionService = this._register(new ModelSelectionService(context, endpointProvider));
 
-		// Initialize the single model chat handler
+		// Initialize the single model chat handler (kept for backward compatibility)
 		this.singleModelChatHandler = this._register(new SingleModelChatHandler(instantiationService));
+
+		// Initialize the multi-model comparison orchestrator
+		this.comparisonChatOrchestrator = this._register(new ComparisonChatOrchestrator(instantiationService));
+
+		// Initialize the response aggregator
+		this.responseAggregator = this._register(new ResponseAggregator());
 	}
 
 	public resolveWebviewView(
@@ -55,10 +67,17 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 		// Set up message handling
 		this.setupMessageHandling(webviewView.webview);
 
+		// Initialize the model metadata cache immediately
+		this.updateModelMetadataCache().catch(error => {
+			console.error('[ModelComparisonViewProvider] Failed to initialize model metadata cache:', error);
+		});
+
 		// Retry loading models in case they weren't available during initial construction
 		// This helps with timing issues during window reload
-		setTimeout(() => {
+		setTimeout(async () => {
 			this.modelSelectionService.retryLoadingModels();
+			// Update the cache after retry loading
+			await this.updateModelMetadataCache();
 		}, 1000); // Give the backend time to initialize
 	}
 
@@ -123,6 +142,24 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				<script nonce="${nonce}" src="${scriptUri}"></script>
 			</body>
 			</html>`;
+	}
+
+	/**
+	 * Update the cached model metadata map with available models
+	 */
+	private async updateModelMetadataCache(): Promise<void> {
+		const availableModels = await this.modelSelectionService.getAvailableModelsAsync();
+		this.modelMetadataMap.clear();
+		for (const model of availableModels) {
+			const metadata = {
+				id: model.id,
+				name: model.name,
+				family: model.family,
+				version: model.version,
+				vendor: model.provider // Use the actual provider as vendor
+			};
+			this.modelMetadataMap.set(model.id, metadata);
+		}
 	}
 
 	/**
@@ -246,6 +283,10 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 			case 'get-available-models': {
 				// Return available models from the service, waiting for initialization if needed
 				const availableModels = await this.modelSelectionService.getAvailableModelsAsync();
+
+				// Update the cached model metadata map for efficient lookup during chat requests
+				await this.updateModelMetadataCache();
+
 				return {
 					models: availableModels
 				};
@@ -307,7 +348,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				};
 
 			case 'send-chat-message': {
-				// Handle chat message and generate real AI responses
+				// Handle chat message using the new multi-model orchestrator
 				if (!message.data?.message || typeof message.data.message !== 'string') {
 					throw new Error('No message provided');
 				}
@@ -319,64 +360,105 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				}
 
 				// Sort models to ensure consistent ordering regardless of selection order
-				// This prevents confusion when models are added/removed
 				const selectedModels = [...selectedModelsRaw].sort();
 
-				const responses: { [modelId: string]: string } = {};
-				const errors: { [modelId: string]: string } = {};
+				try {
+					// Clone the request to ensure identical inputs across all models
+					const clonedRequest = ChatRequestCloner.cloneRequest(message.data.message, []);
 
-				// For Task 3: Real response for first model, mock responses for others
-				// This provides a hybrid approach - users can see real AI output while
-				// still being able to compare multiple models visually
-				for (let i = 0; i < selectedModels.length; i++) {
-					const modelId = selectedModels[i];
-
-					if (i === 0) {
-						// Use real AI response for the first selected model
-						// Note: Currently uses system default model, not the specific requested model
-						try {
-							const cancellationTokenSource = new CancellationTokenSource();
-							const cancellationToken = cancellationTokenSource.token;
-
-							const result = await this.singleModelChatHandler.sendChatMessage(
-								modelId,
-								message.data.message,
-								[], // No history for now
-								cancellationToken,
-								(chunk: string) => {
-									// Stream progress callback - for now just log it
-									console.log(`Streaming chunk for ${modelId}:`, chunk);
-								}
-							);
-
-							if (result.error) {
-								errors[modelId] = result.error;
-								responses[modelId] = '';
-							} else {
-								// Add a note to clarify which model is actually being used
-								const modelMetadata = this.modelSelectionService.getAvailableModels().find(m => m.id === modelId);
-								const modelName = modelMetadata?.name || modelId;
-								const responseWithNote = `🤖 **Real AI Response** (using system default model - ${modelName} selection will be supported in Task 4)\n\n${result.response}`;
-								responses[modelId] = responseWithNote;
-							}
-						} catch (error) {
-							const errorMsg = error instanceof Error ? error.message : String(error);
-							errors[modelId] = errorMsg;
-							responses[modelId] = '';
-						}
-					} else {
-						// Generate mock responses for additional models
-						responses[modelId] = this.generateMockResponse(modelId, message.data.message);
+					// Validate the request
+					if (!ChatRequestCloner.validateRequest(clonedRequest)) {
+						throw new Error('Invalid chat request');
 					}
-				}
 
-				return {
-					message: message.data.message,
-					responses,
-					errors,
-					selectedModels, // Return all selected models
-					timestamp: Date.now()
-				};
+					// Create cancellation token for the entire request
+					const cancellationTokenSource = new CancellationTokenSource();
+					const cancellationToken = cancellationTokenSource.token;
+
+					// Start response aggregation
+					this.responseAggregator.startAggregation(
+						clonedRequest.requestId,
+						clonedRequest.message,
+						selectedModels
+					);
+
+					// Send the message to all selected models simultaneously
+					const modelResponses = await this.comparisonChatOrchestrator.sendChatMessageToMultipleModels(
+						selectedModels,
+						clonedRequest.message,
+						clonedRequest.history,
+						cancellationToken,
+						(modelId: string, chunk: string) => {
+							// Stream progress callback - for now just log it
+							console.log(`Streaming chunk for ${modelId}:`, chunk);
+						},
+						this.modelMetadataMap // Use the cached model metadata map
+					);
+
+					// Update aggregation with all responses
+					for (const response of modelResponses) {
+						this.responseAggregator.updateResponse(clonedRequest.requestId, response);
+					}
+
+					// Complete the aggregation
+					const finalAggregated = this.responseAggregator.completeAggregation(clonedRequest.requestId);
+					if (!finalAggregated) {
+						throw new Error('Failed to complete response aggregation');
+					}
+
+					// Convert to webview format and return
+					return ResponseAggregator.toWebviewFormat(finalAggregated);
+
+				} catch (error) {
+					// If the orchestrator fails, fall back to the old single model approach for debugging
+					console.error('[ModelComparisonViewProvider] Multi-model orchestrator failed, falling back to single model:', error);
+
+					const responses: { [modelId: string]: string } = {};
+					const errors: { [modelId: string]: string } = {};
+
+					// Use single model handler for the first model as fallback
+					const firstModel = selectedModels[0];
+					try {
+						const cancellationTokenSource = new CancellationTokenSource();
+						const cancellationToken = cancellationTokenSource.token;
+
+						// Get model metadata for the fallback model from cache
+						const modelMetadata = this.modelMetadataMap.get(firstModel);
+
+						const result = await this.singleModelChatHandler.sendChatMessage(
+							firstModel,
+							message.data.message,
+							[],
+							cancellationToken,
+							undefined, // no progress callback for fallback
+							modelMetadata
+						);
+
+						if (result.error) {
+							errors[firstModel] = result.error;
+							responses[firstModel] = '';
+						} else {
+							responses[firstModel] = `🤖 **Fallback Response** (multi-model failed)\n\n${result.response}`;
+						}
+					} catch (fallbackError) {
+						const errorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+						errors[firstModel] = errorMsg;
+						responses[firstModel] = '';
+					}
+
+					// Add mock responses for other models
+					for (let i = 1; i < selectedModels.length; i++) {
+						responses[selectedModels[i]] = this.generateMockResponse(selectedModels[i], message.data.message);
+					}
+
+					return {
+						message: message.data.message,
+						responses,
+						errors,
+						selectedModels,
+						timestamp: Date.now()
+					};
+				}
 			}
 
 			default:

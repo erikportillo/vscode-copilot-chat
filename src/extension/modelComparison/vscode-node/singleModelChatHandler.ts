@@ -28,7 +28,7 @@ class ModelComparisonChatRequest implements ChatRequest {
 	public isParticipantDetected: boolean;
 	public toolReferences = [];
 	public toolInvocationToken: never = undefined as never;
-	public model = null!;
+	public model: any = null;
 	public tools = new Map();
 	public id = generateUuid();
 
@@ -60,6 +60,7 @@ export class SingleModelChatHandler implements IDisposable {
 	 * @param message The user's message
 	 * @param history Previous chat history (optional)
 	 * @param cancellationToken Cancellation token for the request
+	 * @param modelMetadata Optional model metadata to create the LanguageModelChat object
 	 * @returns Promise that resolves when the response is complete
 	 */
 	async sendChatMessage(
@@ -67,7 +68,8 @@ export class SingleModelChatHandler implements IDisposable {
 		message: string,
 		history: ReadonlyArray<ChatRequestTurn | ChatResponseTurn> = [],
 		cancellationToken: CancellationToken,
-		onProgress?: (chunk: string) => void
+		onProgress?: (chunk: string) => void,
+		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string }
 	): Promise<{ response: string; error?: string }> {
 
 		if (this._isDisposed) {
@@ -78,25 +80,61 @@ export class SingleModelChatHandler implements IDisposable {
 			// Create a proper ChatRequest for the model comparison
 			const chatRequest = new ModelComparisonChatRequest(message);
 
+			// If we have model metadata, create a proper LanguageModelChat object
+			if (modelMetadata) {
+				// Create LanguageModelChat with vendor: 'copilot' - this is crucial for proper model routing
+				// The endpoint provider uses vendor: 'copilot' to route through ModelMetadataFetcher.getChatModelFromApiModel()
+				// which matches models by id, version, and family properties to resolve to the correct endpoint
+				const languageModelChat: any = {
+					id: modelMetadata.id,
+					name: modelMetadata.name,
+					vendor: 'copilot',
+					family: modelMetadata.family || modelMetadata.id,
+					version: modelMetadata.version || '1.0.0'
+				};
+				chatRequest.model = languageModelChat;
+			}
+
 			// Create a response stream that captures the output
 			let responseContent = '';
 
 			const responseStream = new ChatResponseStreamImpl(
 				(part: ExtendedChatResponsePart) => {
 					// Handle different types of response parts
+					let content: string | undefined;
 					if (part instanceof ChatResponseMarkdownPart) {
-						const content = typeof part.value === 'string' ? part.value : part.value.value;
+						content = typeof part.value === 'string' ? part.value : part.value.value;
+					}
+					// Handle parts with a value property that might be a string or object with value/text
+					else if ('value' in part) {
+						const value = (part as any).value;
+						if (typeof value === 'string') {
+							content = value;
+						} else if (value && typeof value === 'object') {
+							// Check for nested value or text properties
+							if (typeof value.value === 'string') {
+								content = value.value;
+							} else if (typeof value.text === 'string') {
+								content = value.text;
+							} else if (typeof value.content === 'string') {
+								content = value.content;
+							}
+						}
+					}
+					// Handle parts that might have text property directly
+					else if ('text' in part && typeof (part as any).text === 'string') {
+						content = (part as any).text;
+					}
+					// Handle parts that might have content property directly
+					else if ('content' in part && typeof (part as any).content === 'string') {
+						content = (part as any).content;
+					}
+
+					if (content) {
+						console.log(`[SingleModelChatHandler] Extracted content for ${modelId}:`, content);
 						responseContent += content;
 						if (onProgress) {
 							onProgress(content);
-						}
-					}
-					// For other part types, we can add handling as needed
-					// For now, we'll just extract any text content
-					else if ('value' in part && typeof part.value === 'string') {
-						responseContent += part.value;
-						if (onProgress) {
-							onProgress(part.value);
 						}
 					}
 				},
@@ -124,7 +162,9 @@ export class SingleModelChatHandler implements IDisposable {
 			);
 
 			// Execute the request and wait for completion
+			console.log(`[SingleModelChatHandler] Starting request for model ${modelId} with message: "${message}"`);
 			await requestHandler.getResult();
+			console.log(`[SingleModelChatHandler] Completed request for model ${modelId}, response length: ${responseContent.length}`);
 
 			// Return the accumulated response
 			return {
