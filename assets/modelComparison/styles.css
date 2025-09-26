@@ -25,12 +25,150 @@ h1 {
 	margin: 0 0 16px 0;
 }
 
+h2 {
+	color: var(--vscode-panel-title-activeForeground);
+	font-size: 16px;
+	font-weight: 600;
+	margin: 16px 0 12px 0;
+}
+
+h3 {
+	color: var(--vscode-panel-title-activeForeground);
+	font-size: 14px;
+	font-weight: 600;
+	margin: 16px 0 8px 0;
+}
+
 p {
 	color: var(--vscode-descriptionForeground);
 	margin: 0 0 8px 0;
 	line-height: 1.4;
 }
 
+/* Model Selection Section */
+.model-selection-section {
+	margin-bottom: 24px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	padding-bottom: 16px;
+}
+
+.model-selection-info {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 12px;
+}
+
+.selected-count {
+	color: var(--vscode-charts-blue);
+	font-weight: 600;
+	font-size: 13px;
+}
+
+.model-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.model-item {
+	display: flex;
+	align-items: center;
+	padding: 8px 12px;
+	border: 1px solid var(--vscode-input-border);
+	border-radius: 4px;
+	background-color: var(--vscode-input-background);
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.model-item:hover {
+	background-color: var(--vscode-list-hoverBackground);
+	border-color: var(--vscode-focusBorder);
+}
+
+.model-item.selected {
+	background-color: var(--vscode-list-activeSelectionBackground);
+	border-color: var(--vscode-focusBorder);
+	color: var(--vscode-list-activeSelectionForeground);
+}
+
+.model-item input[type="checkbox"] {
+	margin-right: 8px;
+	accent-color: var(--vscode-focusBorder);
+}
+
+.model-info {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+}
+
+.model-name {
+	font-weight: 600;
+	margin-bottom: 2px;
+}
+
+.model-provider {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.selection-controls {
+	display: flex;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+/* Selected Models Display */
+.selected-models-section {
+	margin-bottom: 24px;
+}
+
+.selected-models-display {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.selected-model-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 6px 12px;
+	background-color: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	border-radius: 12px;
+	font-size: 12px;
+}
+
+.selected-model-name {
+	font-weight: 600;
+}
+
+.selected-model-provider {
+	opacity: 0.8;
+	margin-left: 4px;
+}
+
+.remove-model {
+	background: none;
+	border: none;
+	color: var(--vscode-badge-foreground);
+	cursor: pointer;
+	padding: 2px 4px;
+	border-radius: 2px;
+	font-size: 12px;
+	opacity: 0.7;
+}
+
+.remove-model:hover {
+	opacity: 1;
+	background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Button Styles */
 .test-button {
 	background-color: var(--vscode-button-background);
 	color: var(--vscode-button-foreground);
@@ -52,6 +190,34 @@ p {
 	transform: translateY(1px);
 }
 
+.secondary-button {
+	background-color: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	border: none;
+	padding: 6px 12px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-family: var(--vscode-font-family);
+	font-size: 12px;
+}
+
+.secondary-button:hover {
+	background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+.secondary-button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* Testing Section */
+.testing-section {
+	margin-top: 24px;
+	padding-top: 16px;
+	border-top: 1px solid var(--vscode-panel-border);
+	opacity: 0.7;
+}
+
 .instructions {
 	font-size: 12px;
 	color: var(--vscode-descriptionForeground);
@@ -68,4 +234,21 @@ p {
 	border-radius: 4px;
 	font-size: 12px;
 	word-wrap: break-word;
+}
+
+/* Loading State */
+.loading {
+	opacity: 0.6;
+	pointer-events: none;
+}
+
+/* Error State */
+.error-message {
+	background-color: var(--vscode-inputValidation-errorBackground);
+	color: var(--vscode-inputValidation-errorForeground);
+	border: 1px solid var(--vscode-inputValidation-errorBorder);
+	padding: 8px 12px;
+	margin: 8px 0;
+	border-radius: 4px;
+	font-size: 12px;
 }

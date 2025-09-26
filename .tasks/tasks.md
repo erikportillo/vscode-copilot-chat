@@ -124,7 +124,7 @@ This implementation follows a **progressive enhancement approach** to ensure eac
 
 ---
 
-### TASK 1C: Model Selection UI with Mock Data
+### [DONE] TASK 1C: Model Selection UI with Mock Data
 **Objective**: Create model selection interface using mock model data
 
 **Prerequisites**: Task 1B must be completed and tested
@@ -138,9 +138,9 @@ This implementation follows a **progressive enhancement approach** to ensure eac
 **Mock Models Data**:
 ```typescript
 const MOCK_MODELS = [
-  { id: 'gpt-4', name: 'GPT-4', provider: 'OpenAI' },
-  { id: 'claude-3', name: 'Claude 3', provider: 'Anthropic' },
-  { id: 'gpt-3.5', name: 'GPT-3.5 Turbo', provider: 'OpenAI' }
+  { id: 'gpt-5', name: 'GPT-5', provider: 'OpenAI' },
+  { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Anthropic' },
+  { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'OpenAI' }
 ];
 ```
 

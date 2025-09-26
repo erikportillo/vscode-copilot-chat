@@ -21,7 +21,8 @@ export class ModelComparisonFeature extends Disposable implements IExtensionCont
 		super();
 
 		// Create and register the webview view provider
-		const provider = this._register(new ModelComparisonViewProvider(extensionContext.extensionUri));
+		// Note: extensionContext should be the full VS Code ExtensionContext with workspaceState
+		const provider = this._register(new ModelComparisonViewProvider(extensionContext.extensionUri, extensionContext as vscode.ExtensionContext));
 
 		this._register(vscode.window.registerWebviewViewProvider(
 			ModelComparisonViewProvider.viewType,

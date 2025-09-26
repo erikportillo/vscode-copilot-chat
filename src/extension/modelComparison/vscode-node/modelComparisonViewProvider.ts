@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
+import { ModelSelectionService } from './modelSelectionService';
 
 /**
  * Provider for the Model Comparison WebView panel
@@ -13,10 +14,16 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 	public static readonly viewType = 'model-comparison-panel';
 
+	private readonly modelSelectionService: ModelSelectionService;
+
 	constructor(
 		private readonly extensionUri: vscode.Uri,
+		context: vscode.ExtensionContext,
 	) {
 		super();
+
+		// Initialize the model selection service
+		this.modelSelectionService = this._register(new ModelSelectionService(context));
 	}
 
 	public resolveWebviewView(
@@ -56,7 +63,40 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 			<body>
 				<div class="container">
 					<h1>Model Comparison Panel</h1>
-					<p>This is the basic Model Comparison WebView panel foundation.</p>
+
+					<!-- Model Selection Section -->
+					<div class="model-selection-section">
+						<h2>Select Models to Compare</h2>
+						<div class="model-selection-info">
+							<p>Choose 2-4 models for comparison:</p>
+							<div class="selected-count">
+								<span id="selected-count">0</span> models selected
+							</div>
+						</div>
+
+						<div class="model-list" id="model-list">
+							<!-- Model checkboxes will be populated by JavaScript -->
+						</div>
+
+						<div class="selection-controls">
+							<button id="reset-selection" class="secondary-button">Reset to Defaults</button>
+							<button id="clear-all" class="secondary-button">Clear All</button>
+						</div>
+					</div>
+
+					<!-- Selected Models Display -->
+					<div class="selected-models-section">
+						<h3>Selected Models</h3>
+						<div class="selected-models-display" id="selected-models-display">
+							<!-- Selected models will be displayed here -->
+						</div>
+					</div>
+
+					<!-- Testing Section (keep for development) -->
+					<div class="testing-section">
+						<h3>Development Testing</h3>
+						<p>This section is for development testing and will be removed in later tasks.</p>
+					</div>
 				</div>
 				<script src="${scriptUri}"></script>
 			</body>
@@ -118,6 +158,56 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					message: `Extension received: ${message.data?.message || 'no message'}`,
 					timestamp: Date.now(),
 					success: true
+				};
+
+			case 'get-available-models':
+				// Return available models from the service
+				return {
+					models: this.modelSelectionService.getAvailableModels()
+				};
+
+			case 'get-selected-models':
+				// Return currently selected models
+				return {
+					selectedModels: this.modelSelectionService.getSelectedModels(),
+					selectedModelMetadata: this.modelSelectionService.getSelectedModelMetadata()
+				};
+
+			case 'set-selected-models':
+				// Update selected models
+				if (!message.data?.modelIds || !Array.isArray(message.data.modelIds)) {
+					throw new Error('Invalid modelIds provided');
+				}
+				await this.modelSelectionService.setSelectedModels(message.data.modelIds);
+				return {
+					success: true,
+					selectedModels: this.modelSelectionService.getSelectedModels()
+				};
+
+			case 'toggle-model':
+				// Toggle a model's selection state
+				if (!message.data?.modelId) {
+					throw new Error('No modelId provided');
+				}
+				await this.modelSelectionService.toggleModel(message.data.modelId);
+				return {
+					success: true,
+					selectedModels: this.modelSelectionService.getSelectedModels()
+				};
+
+			case 'reset-to-defaults':
+				// Reset to default model selection
+				await this.modelSelectionService.resetToDefaults();
+				return {
+					success: true,
+					selectedModels: this.modelSelectionService.getSelectedModels()
+				};
+
+			case 'get-selection-state':
+				// Get full selection state for debugging
+				return {
+					selectionState: this.modelSelectionService.getSelectionState(),
+					availableModels: this.modelSelectionService.getAvailableModels()
 				};
 
 			default:

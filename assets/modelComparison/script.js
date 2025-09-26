@@ -147,24 +147,282 @@
 	}
 
 	/**
-	 * Initialize the webview
+	 * State management for model selection
 	 */
-	function init() {
-		console.log('Model Comparison webview initialized');
+	const modelSelectionState = {
+		availableModels: [],
+		selectedModels: [],
+		initialized: false
+	};
 
-		// Add test button for manual testing
+	/**
+	 * Load available models from the extension
+	 */
+	async function loadAvailableModels() {
+		try {
+			const response = await sendMessage('get-available-models');
+			modelSelectionState.availableModels = response.models || [];
+			return modelSelectionState.availableModels;
+		} catch (error) {
+			console.error('Failed to load available models:', error);
+			showErrorMessage('Failed to load available models: ' + error.message);
+			return [];
+		}
+	}
+
+	/**
+	 * Load currently selected models from the extension
+	 */
+	async function loadSelectedModels() {
+		try {
+			const response = await sendMessage('get-selected-models');
+			modelSelectionState.selectedModels = response.selectedModels || [];
+			return modelSelectionState.selectedModels;
+		} catch (error) {
+			console.error('Failed to load selected models:', error);
+			showErrorMessage('Failed to load selected models: ' + error.message);
+			return [];
+		}
+	}
+
+	/**
+	 * Update selected models in the extension
+	 */
+	async function updateSelectedModels(modelIds) {
+		try {
+			await sendMessage('set-selected-models', { modelIds });
+			modelSelectionState.selectedModels = modelIds;
+			updateUI();
+			return true;
+		} catch (error) {
+			console.error('Failed to update selected models:', error);
+			showErrorMessage('Failed to update selected models: ' + error.message);
+			return false;
+		}
+	}
+
+	/**
+	 * Toggle a model's selection state
+	 */
+	async function toggleModel(modelId) {
+		try {
+			await sendMessage('toggle-model', { modelId });
+			// Reload selected models to get the updated state
+			await loadSelectedModels();
+			updateUI();
+		} catch (error) {
+			console.error('Failed to toggle model:', error);
+			showErrorMessage('Failed to toggle model: ' + error.message);
+		}
+	}
+
+	/**
+	 * Reset to default model selection
+	 */
+	async function resetToDefaults() {
+		try {
+			await sendMessage('reset-to-defaults');
+			await loadSelectedModels();
+			updateUI();
+		} catch (error) {
+			console.error('Failed to reset to defaults:', error);
+			showErrorMessage('Failed to reset to defaults: ' + error.message);
+		}
+	}
+
+	/**
+	 * Clear all selected models
+	 */
+	async function clearAllModels() {
+		// Since we need at least one model, we can't actually clear all
+		// Instead, reset to a single default model
+		try {
+			await sendMessage('set-selected-models', { modelIds: ['gpt-5'] });
+			await loadSelectedModels();
+			updateUI();
+		} catch (error) {
+			console.error('Failed to clear models:', error);
+			showErrorMessage('Failed to clear models: ' + error.message);
+		}
+	}
+
+	/**
+	 * Render the model list UI
+	 */
+	function renderModelList() {
+		const modelList = document.getElementById('model-list');
+		if (!modelList) {
+			return;
+		}
+
+		modelList.innerHTML = '';
+
+		modelSelectionState.availableModels.forEach(model => {
+			const isSelected = modelSelectionState.selectedModels.includes(model.id);
+
+			const modelItem = document.createElement('div');
+			modelItem.className = `model-item ${isSelected ? 'selected' : ''}`;
+			modelItem.onclick = () => toggleModel(model.id);
+
+			modelItem.innerHTML = `
+				<input type="checkbox" ${isSelected ? 'checked' : ''} readonly>
+				<div class="model-info">
+					<div class="model-name">${escapeHtml(model.name)}</div>
+					<div class="model-provider">${escapeHtml(model.provider)}</div>
+				</div>
+			`;
+
+			modelList.appendChild(modelItem);
+		});
+	}
+
+	/**
+	 * Render the selected models display
+	 */
+	function renderSelectedModels() {
+		const selectedModelsDisplay = document.getElementById('selected-models-display');
+		if (!selectedModelsDisplay) {
+			return;
+		}
+
+		selectedModelsDisplay.innerHTML = '';
+
+		if (modelSelectionState.selectedModels.length === 0) {
+			selectedModelsDisplay.innerHTML = '<p class="instructions">No models selected</p>';
+			return;
+		}
+
+		modelSelectionState.selectedModels.forEach(modelId => {
+			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+			if (!model) {
+				return;
+			}
+
+			const selectedItem = document.createElement('div');
+			selectedItem.className = 'selected-model-item';
+
+			selectedItem.innerHTML = `
+				<div>
+					<span class="selected-model-name">${escapeHtml(model.name)}</span>
+					<span class="selected-model-provider">(${escapeHtml(model.provider)})</span>
+				</div>
+				<button class="remove-model" title="Remove model">×</button>
+			`;
+
+			// Add event listener to the remove button
+			const removeButton = selectedItem.querySelector('.remove-model');
+			if (removeButton) {
+				removeButton.onclick = () => toggleModel(model.id);
+			}
+
+			selectedModelsDisplay.appendChild(selectedItem);
+		});
+	}
+
+	/**
+	 * Update the selected count display
+	 */
+	function updateSelectedCount() {
+		const selectedCountElement = document.getElementById('selected-count');
+		if (selectedCountElement) {
+			selectedCountElement.textContent = modelSelectionState.selectedModels.length;
+		}
+	}
+
+	/**
+	 * Update the entire UI
+	 */
+	function updateUI() {
+		renderModelList();
+		renderSelectedModels();
+		updateSelectedCount();
+	}
+
+	/**
+	 * Show an error message to the user
+	 */
+	function showErrorMessage(message) {
+		const errorDiv = document.createElement('div');
+		errorDiv.className = 'error-message';
+		errorDiv.textContent = message;
+
 		const container = document.querySelector('.container');
 		if (container) {
+			container.insertBefore(errorDiv, container.firstChild);
+
+			// Remove error message after 5 seconds
+			setTimeout(() => {
+				if (errorDiv.parentNode) {
+					errorDiv.parentNode.removeChild(errorDiv);
+				}
+			}, 5000);
+		}
+	}
+
+	/**
+	 * Escape HTML to prevent XSS
+	 */
+	function escapeHtml(text) {
+		const div = document.createElement('div');
+		div.textContent = text;
+		return div.innerHTML;
+	}
+
+	/**
+	 * Initialize the webview
+	 */
+	async function init() {
+		console.log('Model Comparison webview initialized');
+
+		// Set up event listeners for control buttons
+		const resetButton = document.getElementById('reset-selection');
+		const clearButton = document.getElementById('clear-all');
+
+		if (resetButton) {
+			resetButton.onclick = resetToDefaults;
+		}
+
+		if (clearButton) {
+			clearButton.onclick = clearAllModels;
+		}
+
+		// Add test button for manual testing in the testing section
+		const testingSection = document.querySelector('.testing-section');
+		if (testingSection) {
 			const testButton = document.createElement('button');
 			testButton.textContent = 'Send Test Message';
 			testButton.className = 'test-button';
 			testButton.onclick = sendTestMessage;
-			container.appendChild(testButton);
+			testingSection.appendChild(testButton);
 
 			const instructions = document.createElement('p');
 			instructions.textContent = 'Click the button above to test message passing. Check the Developer Console for detailed logs.';
 			instructions.className = 'instructions';
-			container.appendChild(instructions);
+			testingSection.appendChild(instructions);
+		}
+
+		// Initialize model selection
+		try {
+			console.log('Loading models and selection state...');
+
+			// Load both available models and current selection
+			await Promise.all([
+				loadAvailableModels(),
+				loadSelectedModels()
+			]);
+
+			console.log('Models loaded:', {
+				available: modelSelectionState.availableModels,
+				selected: modelSelectionState.selectedModels
+			});
+
+			// Update UI with loaded data
+			updateUI();
+			modelSelectionState.initialized = true;
+
+		} catch (error) {
+			console.error('Failed to initialize model selection:', error);
+			showErrorMessage('Failed to initialize model selection. Please reload the panel.');
 		}
 
 		// Send initial ping to extension
@@ -187,10 +445,18 @@
 		init();
 	}
 
-	// Make sendMessage available globally for debugging
+	// Make functions available globally for debugging
 	window.modelComparison = {
 		sendMessage,
-		sendTestMessage
+		sendTestMessage,
+		loadAvailableModels,
+		loadSelectedModels,
+		updateSelectedModels,
+		toggleModel,
+		resetToDefaults,
+		clearAllModels,
+		modelSelectionState,
+		updateUI
 	};
 
 })();
