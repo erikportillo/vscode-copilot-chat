@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { ModelSelectionService } from './modelSelectionService';
 
@@ -19,11 +20,12 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		context: vscode.ExtensionContext,
+		endpointProvider: IEndpointProvider
 	) {
 		super();
 
-		// Initialize the model selection service
-		this.modelSelectionService = this._register(new ModelSelectionService(context));
+		// Initialize the model selection service with endpoint provider
+		this.modelSelectionService = this._register(new ModelSelectionService(context, endpointProvider));
 	}
 
 	public resolveWebviewView(
@@ -44,6 +46,12 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 		// Set up message handling
 		this.setupMessageHandling(webviewView.webview);
+
+		// Retry loading models in case they weren't available during initial construction
+		// This helps with timing issues during window reload
+		setTimeout(() => {
+			this.modelSelectionService.retryLoadingModels();
+		}, 1000); // Give the backend time to initialize
 	}
 
 	private getHtmlForWebview(webview: vscode.Webview): string {
@@ -52,11 +60,15 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 		const stylesUri = webview.asWebviewUri(vscode.Uri.joinPath(assetsPath, 'styles.css'));
 		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(assetsPath, 'script.js'));
 
+		// Generate nonce for Content Security Policy
+		const nonce = this.getNonce();
+
 		return `<!DOCTYPE html>
 			<html lang="en">
 			<head>
 				<meta charset="UTF-8">
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
 				<link href="${stylesUri}" rel="stylesheet">
 				<title>Model Comparison Panel</title>
 			</head>
@@ -78,8 +90,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						</div>
 
 						<div class="selection-controls">
-							<button id="reset-selection" class="secondary-button">Reset</button>
-							<button id="clear-all" class="secondary-button">Clear</button>
+							<button id="reset-selection" class="secondary-button" title="Reset to default model selection">Reset</button>
+							<button id="clear-all" class="secondary-button" title="Reduce to minimal selection">Clear</button>
 						</div>
 					</div>
 
@@ -100,9 +112,21 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 
 				</div>
-				<script src="${scriptUri}"></script>
+				<script nonce="${nonce}" src="${scriptUri}"></script>
 			</body>
 			</html>`;
+	}
+
+	/**
+	 * Generate a nonce for Content Security Policy
+	 */
+	private getNonce(): string {
+		let text = '';
+		const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+		for (let i = 0; i < 32; i++) {
+			text += possible.charAt(Math.floor(Math.random() * possible.length));
+		}
+		return text;
 	}
 
 	/**
@@ -209,18 +233,23 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					success: true
 				};
 
-			case 'get-available-models':
-				// Return available models from the service
+			case 'get-available-models': {
+				// Return available models from the service, waiting for initialization if needed
+				const availableModels = await this.modelSelectionService.getAvailableModelsAsync();
 				return {
-					models: this.modelSelectionService.getAvailableModels()
+					models: availableModels
 				};
+			}
 
-			case 'get-selected-models':
-				// Return currently selected models
+			case 'get-selected-models': {
+				// Return currently selected models, waiting for initialization if needed
+				const selectedModels = await this.modelSelectionService.getSelectedModelsAsync();
+				const selectedModelMetadata = await this.modelSelectionService.getSelectedModelMetadataAsync();
 				return {
-					selectedModels: this.modelSelectionService.getSelectedModels(),
-					selectedModelMetadata: this.modelSelectionService.getSelectedModelMetadata()
+					selectedModels,
+					selectedModelMetadata
 				};
+			}
 
 			case 'set-selected-models':
 				// Update selected models
@@ -247,6 +276,14 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 			case 'reset-to-defaults':
 				// Reset to default model selection
 				await this.modelSelectionService.resetToDefaults();
+				return {
+					success: true,
+					selectedModels: this.modelSelectionService.getSelectedModels()
+				};
+
+			case 'clear-all':
+				// Clear all selected models
+				await this.modelSelectionService.clearAll();
 				return {
 					success: true,
 					selectedModels: this.modelSelectionService.getSelectedModels()

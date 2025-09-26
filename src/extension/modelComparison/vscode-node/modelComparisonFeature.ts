@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
 import { IVSCodeExtensionContext } from '../../../platform/extContext/common/extensionContext';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IExtensionContribution } from '../../common/contributions';
@@ -17,12 +18,13 @@ export class ModelComparisonFeature extends Disposable implements IExtensionCont
 
 	constructor(
 		@IVSCodeExtensionContext extensionContext: IVSCodeExtensionContext,
+		@IEndpointProvider endpointProvider: IEndpointProvider,
 	) {
 		super();
 
 		// Create and register the webview view provider
 		// Note: extensionContext should be the full VS Code ExtensionContext with workspaceState
-		const provider = this._register(new ModelComparisonViewProvider(extensionContext.extensionUri, extensionContext as vscode.ExtensionContext));
+		const provider = this._register(new ModelComparisonViewProvider(extensionContext.extensionUri, extensionContext as vscode.ExtensionContext, endpointProvider));
 
 		this._register(vscode.window.registerWebviewViewProvider(
 			ModelComparisonViewProvider.viewType,

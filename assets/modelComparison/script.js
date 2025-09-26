@@ -226,18 +226,54 @@
 	}
 
 	/**
-	 * Clear all selected models
+	 * Clear to minimal selection (1 model)
 	 */
 	async function clearAllModels() {
-		// Since we need at least one model, we can't actually clear all
-		// Instead, reset to a single default model
+		// Check if we're already at minimal selection
+		if (modelSelectionState.selectedModels.length <= 1) {
+			showNotification('Already at minimal selection (1 model required)');
+			return;
+		}
+
+		const previousCount = modelSelectionState.selectedModels.length;
+
 		try {
-			await sendMessage('set-selected-models', { modelIds: ['gpt-5'] });
+			// Clear to minimal selection on the backend
+			await sendMessage('clear-all');
 			await loadSelectedModels();
 			updateUI();
+
+			// Show success notification
+			const newCount = modelSelectionState.selectedModels.length;
+			showNotification(`Reduced selection to minimal (${previousCount} → ${newCount} model${newCount > 1 ? 's' : ''})`);
+
+			// Update the clear button state
+			updateClearButtonState();
 		} catch (error) {
 			console.error('Failed to clear models:', error);
 			showErrorMessage('Failed to clear models: ' + error.message);
+		}
+	}
+
+	/**
+	 * Update the clear button state based on selection
+	 */
+	function updateClearButtonState() {
+		const clearButton = document.getElementById('clear-all');
+		if (clearButton) {
+			const selectionCount = modelSelectionState.selectedModels.length;
+
+			// Disable if we're already at minimal selection (1 model) or no models available
+			clearButton.disabled = selectionCount <= 1;
+
+			// Update button text and tooltip based on selection count
+			if (selectionCount <= 1) {
+				clearButton.textContent = 'Clear';
+				clearButton.title = 'Already at minimal selection (1 model required)';
+			} else {
+				clearButton.textContent = `Clear (${selectionCount})`;
+				clearButton.title = `Reduce to minimal selection (keep only 1 model)`;
+			}
 		}
 	}
 
@@ -290,6 +326,7 @@
 		renderModelList();
 		updateSelectedCount();
 		updateChatUI();
+		updateClearButtonState();
 	}
 
 	/**
