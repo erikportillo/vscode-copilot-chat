@@ -131,20 +131,7 @@
 		}
 	}
 
-	/**
-	 * Test function to send a test message to the extension
-	 */
-	function sendTestMessage() {
-		sendMessage('test-command', { message: 'Hello from webview!' })
-			.then(response => {
-				console.log('Test message response:', response);
-				showNotification(`Extension responded: ${JSON.stringify(response)}`);
-			})
-			.catch(error => {
-				console.error('Test message error:', error);
-				showNotification(`Error: ${error.message}`);
-			});
-	}
+
 
 	/**
 	 * State management for model selection
@@ -153,6 +140,14 @@
 		availableModels: [],
 		selectedModels: [],
 		initialized: false
+	};
+
+	/**
+	 * State management for chat
+	 */
+	const chatState = {
+		messages: [],
+		isLoading: false
 	};
 
 	/**
@@ -276,48 +271,7 @@
 		});
 	}
 
-	/**
-	 * Render the selected models display
-	 */
-	function renderSelectedModels() {
-		const selectedModelsDisplay = document.getElementById('selected-models-display');
-		if (!selectedModelsDisplay) {
-			return;
-		}
 
-		selectedModelsDisplay.innerHTML = '';
-
-		if (modelSelectionState.selectedModels.length === 0) {
-			selectedModelsDisplay.innerHTML = '<p class="instructions">No models selected</p>';
-			return;
-		}
-
-		modelSelectionState.selectedModels.forEach(modelId => {
-			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
-			if (!model) {
-				return;
-			}
-
-			const selectedItem = document.createElement('div');
-			selectedItem.className = 'selected-model-item';
-
-			selectedItem.innerHTML = `
-				<div>
-					<span class="selected-model-name">${escapeHtml(model.name)}</span>
-					<span class="selected-model-provider">(${escapeHtml(model.provider)})</span>
-				</div>
-				<button class="remove-model" title="Remove model">×</button>
-			`;
-
-			// Add event listener to the remove button
-			const removeButton = selectedItem.querySelector('.remove-model');
-			if (removeButton) {
-				removeButton.onclick = () => toggleModel(model.id);
-			}
-
-			selectedModelsDisplay.appendChild(selectedItem);
-		});
-	}
 
 	/**
 	 * Update the selected count display
@@ -334,8 +288,8 @@
 	 */
 	function updateUI() {
 		renderModelList();
-		renderSelectedModels();
 		updateSelectedCount();
+		updateChatUI();
 	}
 
 	/**
@@ -369,6 +323,247 @@
 	}
 
 	/**
+	 * Send a chat message to the extension
+	 */
+	async function sendChatMessage(message) {
+		if (!message || message.trim() === '') {
+			showErrorMessage('Please enter a message');
+			return;
+		}
+
+		if (modelSelectionState.selectedModels.length === 0) {
+			showErrorMessage('Please select at least one model for comparison');
+			return;
+		}
+
+		try {
+			chatState.isLoading = true;
+			updateChatUI();
+
+			// Add user message to chat
+			const userMessage = {
+				id: Date.now(),
+				type: 'user',
+				content: message,
+				timestamp: Date.now()
+			};
+
+			chatState.messages.push(userMessage);
+			updateChatUI();
+
+			// Send message to extension and get responses
+			const response = await sendMessage('send-chat-message', { message });
+
+			// Add assistant responses to chat
+			const assistantMessage = {
+				id: Date.now() + 1,
+				type: 'assistant',
+				content: message,
+				responses: response.responses,
+				selectedModels: response.selectedModels,
+				timestamp: response.timestamp
+			};
+
+			chatState.messages.push(assistantMessage);
+
+		} catch (error) {
+			console.error('Failed to send chat message:', error);
+			showErrorMessage('Failed to send message: ' + error.message);
+		} finally {
+			chatState.isLoading = false;
+			updateChatUI();
+		}
+	}
+
+	/**
+	 * Clear all chat messages
+	 */
+	function clearChat() {
+		chatState.messages = [];
+		updateChatUI();
+	}
+
+	/**
+	 * Update the chat UI
+	 */
+	function updateChatUI() {
+		renderChatMessages();
+		updateSendButton();
+	}
+
+	/**
+	 * Render chat messages in the UI
+	 */
+	function renderChatMessages() {
+		const chatMessages = document.getElementById('chat-messages');
+		if (!chatMessages) {
+			return;
+		}
+
+		// Clear existing messages
+		chatMessages.innerHTML = '';
+
+		// Show instructions if no messages
+		if (chatState.messages.length === 0) {
+			const instructions = document.createElement('div');
+			instructions.className = 'chat-instructions';
+			instructions.textContent = 'Select models above and send a message to see side-by-side responses';
+			chatMessages.appendChild(instructions);
+			return;
+		}
+
+		// Render each message
+		chatState.messages.forEach(message => {
+			if (message.type === 'user') {
+				renderUserMessage(chatMessages, message);
+			} else if (message.type === 'assistant') {
+				renderAssistantMessage(chatMessages, message);
+			}
+		});
+
+		// Show loading indicator if needed
+		if (chatState.isLoading) {
+			renderLoadingMessage(chatMessages);
+		}
+
+		// Scroll to bottom
+		chatMessages.scrollTop = chatMessages.scrollHeight;
+	}
+
+	/**
+	 * Render a user message
+	 */
+	function renderUserMessage(container, message) {
+		const messageGroup = document.createElement('div');
+		messageGroup.className = 'message-group';
+
+		const userMessage = document.createElement('div');
+		userMessage.className = 'user-message';
+
+		const text = document.createElement('div');
+		text.className = 'user-message-text';
+		text.textContent = message.content;
+
+		userMessage.appendChild(text);
+		messageGroup.appendChild(userMessage);
+		container.appendChild(messageGroup);
+	}
+
+	/**
+	 * Render assistant responses from multiple models
+	 */
+	function renderAssistantMessage(container, message) {
+		const messageGroup = document.createElement('div');
+		messageGroup.className = 'message-group';
+
+		const modelResponses = document.createElement('div');
+		modelResponses.className = 'model-responses';
+
+		// Create response cards for each model
+		message.selectedModels.forEach(modelId => {
+			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+			const responseText = message.responses[modelId];
+
+			const responseCard = document.createElement('div');
+			responseCard.className = 'model-response';
+
+			// Response header with model info
+			const header = document.createElement('div');
+			header.className = 'model-response-header';
+
+			const title = document.createElement('div');
+			title.className = 'model-response-title';
+			title.textContent = model?.name || modelId;
+
+			const provider = document.createElement('div');
+			provider.className = 'model-response-provider';
+			provider.textContent = model?.provider || '';
+
+			header.appendChild(title);
+			header.appendChild(provider);
+
+			// Response content
+			const content = document.createElement('div');
+			content.className = 'model-response-content';
+
+			const text = document.createElement('div');
+			text.className = 'model-response-text';
+			text.textContent = responseText || 'No response';
+
+			content.appendChild(text);
+
+			responseCard.appendChild(header);
+			responseCard.appendChild(content);
+			modelResponses.appendChild(responseCard);
+		});
+
+		messageGroup.appendChild(modelResponses);
+		container.appendChild(messageGroup);
+	}
+
+	/**
+	 * Render loading message
+	 */
+	function renderLoadingMessage(container) {
+		const messageGroup = document.createElement('div');
+		messageGroup.className = 'message-group';
+
+		const modelResponses = document.createElement('div');
+		modelResponses.className = 'model-responses';
+
+		// Create loading cards for each selected model
+		modelSelectionState.selectedModels.forEach(modelId => {
+			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+
+			const responseCard = document.createElement('div');
+			responseCard.className = 'model-response';
+
+			// Response header
+			const header = document.createElement('div');
+			header.className = 'model-response-header';
+
+			const title = document.createElement('div');
+			title.className = 'model-response-title';
+			title.textContent = model?.name || modelId;
+
+			const provider = document.createElement('div');
+			provider.className = 'model-response-provider';
+			provider.textContent = model?.provider || '';
+
+			header.appendChild(title);
+			header.appendChild(provider);
+
+			// Loading content
+			const content = document.createElement('div');
+			content.className = 'model-response-content';
+
+			const loading = document.createElement('div');
+			loading.className = 'response-loading';
+			loading.textContent = 'Generating response';
+
+			content.appendChild(loading);
+
+			responseCard.appendChild(header);
+			responseCard.appendChild(content);
+			modelResponses.appendChild(responseCard);
+		});
+
+		messageGroup.appendChild(modelResponses);
+		container.appendChild(messageGroup);
+	}
+
+	/**
+	 * Update send button state
+	 */
+	function updateSendButton() {
+		const sendButton = document.getElementById('send-button');
+		if (sendButton) {
+			sendButton.disabled = chatState.isLoading || modelSelectionState.selectedModels.length === 0;
+			sendButton.textContent = chatState.isLoading ? 'Sending...' : 'Send';
+		}
+	}
+
+	/**
 	 * Initialize the webview
 	 */
 	async function init() {
@@ -386,20 +581,51 @@
 			clearButton.onclick = clearAllModels;
 		}
 
-		// Add test button for manual testing in the testing section
-		const testingSection = document.querySelector('.testing-section');
-		if (testingSection) {
-			const testButton = document.createElement('button');
-			testButton.textContent = 'Send Test Message';
-			testButton.className = 'test-button';
-			testButton.onclick = sendTestMessage;
-			testingSection.appendChild(testButton);
+		// Set up chat interface event listeners
+		const chatInput = document.getElementById('chat-input');
+		const sendButton = document.getElementById('send-button');
 
-			const instructions = document.createElement('p');
-			instructions.textContent = 'Click the button above to test message passing. Check the Developer Console for detailed logs.';
-			instructions.className = 'instructions';
-			testingSection.appendChild(instructions);
+		if (sendButton) {
+			sendButton.onclick = () => {
+				const message = chatInput?.value || '';
+				if (message.trim()) {
+					sendChatMessage(message.trim());
+					if (chatInput) {
+						chatInput.value = '';
+					}
+				}
+			};
 		}
+
+		if (chatInput) {
+			// Send message on Enter (but allow Shift+Enter for new lines)
+			chatInput.addEventListener('keydown', (event) => {
+				if (event.key === 'Enter' && !event.shiftKey) {
+					event.preventDefault();
+					const message = chatInput.value.trim();
+					if (message) {
+						sendChatMessage(message);
+						chatInput.value = '';
+					}
+				}
+			});
+
+			// Update send button state when input changes
+			chatInput.addEventListener('input', updateSendButton);
+
+			// Handle Enter key to send message (Shift+Enter for new line)
+			chatInput.addEventListener('keydown', (event) => {
+				if (event.key === 'Enter' && !event.shiftKey) {
+					event.preventDefault();
+					const sendButton = document.getElementById('send-button');
+					if (sendButton && !sendButton.disabled) {
+						sendChatMessage();
+					}
+				}
+			});
+		}
+
+
 
 		// Initialize model selection
 		try {
@@ -448,14 +674,16 @@
 	// Make functions available globally for debugging
 	window.modelComparison = {
 		sendMessage,
-		sendTestMessage,
 		loadAvailableModels,
 		loadSelectedModels,
 		updateSelectedModels,
 		toggleModel,
 		resetToDefaults,
 		clearAllModels,
+		sendChatMessage,
+		clearChat,
 		modelSelectionState,
+		chatState,
 		updateUI
 	};
 

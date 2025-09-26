@@ -64,13 +64,12 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				<div class="container">
 					<h1>Model Comparison Panel</h1>
 
-					<!-- Model Selection Section -->
+					<!-- Compact Model Selection Section -->
 					<div class="model-selection-section">
-						<h2>Select Models to Compare</h2>
-						<div class="model-selection-info">
-							<p>Choose 2-4 models for comparison:</p>
+						<div class="model-selection-header">
+							<h2>Models</h2>
 							<div class="selected-count">
-								<span id="selected-count">0</span> models selected
+								<span id="selected-count">0</span>/4 selected
 							</div>
 						</div>
 
@@ -79,24 +78,27 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						</div>
 
 						<div class="selection-controls">
-							<button id="reset-selection" class="secondary-button">Reset to Defaults</button>
-							<button id="clear-all" class="secondary-button">Clear All</button>
+							<button id="reset-selection" class="secondary-button">Reset</button>
+							<button id="clear-all" class="secondary-button">Clear</button>
 						</div>
 					</div>
 
-					<!-- Selected Models Display -->
-					<div class="selected-models-section">
-						<h3>Selected Models</h3>
-						<div class="selected-models-display" id="selected-models-display">
-							<!-- Selected models will be displayed here -->
+					<!-- Chat Messages Display -->
+					<div class="chat-messages" id="chat-messages">
+						<div class="chat-instructions">
+							Select models above and send a message to see side-by-side responses
 						</div>
 					</div>
 
-					<!-- Testing Section (keep for development) -->
-					<div class="testing-section">
-						<h3>Development Testing</h3>
-						<p>This section is for development testing and will be removed in later tasks.</p>
+					<!-- Chat Input Section -->
+					<div class="chat-input-section">
+						<div class="chat-input-container">
+							<textarea id="chat-input" placeholder="Type your message here..." rows="2"></textarea>
+							<button id="send-button" class="primary-button">Send</button>
+						</div>
 					</div>
+
+
 				</div>
 				<script src="${scriptUri}"></script>
 			</body>
@@ -137,6 +139,53 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				}
 			}
 		}));
+	}
+
+	/**
+	 * Generate mock response for a given model and message
+	 */
+	private generateMockResponse(modelId: string, message: string): string {
+		const model = this.modelSelectionService.getAvailableModels().find(m => m.id === modelId);
+		const modelName = model?.name || modelId;
+
+		// Generate different mock responses based on the model to simulate differences
+		const responses = {
+			'gpt-5': [
+				`As GPT-5, I'd be happy to help with "${message}". Here's a comprehensive response that demonstrates advanced reasoning capabilities...`,
+				`From a GPT-5 perspective on "${message}": I can provide detailed analysis with multiple viewpoints...`,
+				`GPT-5 analysis of "${message}": Let me break this down systematically with enhanced understanding...`
+			],
+			'claude-sonnet-4': [
+				`Claude Sonnet 4 responding to "${message}": I'll approach this thoughtfully with careful consideration...`,
+				`As Claude Sonnet 4, regarding "${message}": I believe a nuanced approach would be most beneficial...`,
+				`Claude Sonnet 4's perspective on "${message}": Let me provide a balanced and thorough response...`
+			],
+			'gpt-4.1': [
+				`GPT-4.1 here! For "${message}", I can offer this insight based on my training...`,
+				`From GPT-4.1: "${message}" is an interesting query. Here's my analysis...`,
+				`GPT-4.1 response to "${message}": I'll provide a detailed breakdown...`
+			]
+		};
+
+		// Get model-specific responses or fall back to generic ones
+		const modelResponses = responses[modelId as keyof typeof responses] || [
+			`[${modelName}] Mock response to: "${message}". This is a simulated response for testing purposes.`,
+			`[${modelName}] Analyzing "${message}"... Here's what I think about this query.`,
+			`[${modelName}] Responding to "${message}": This is a mock response to demonstrate the comparison interface.`
+		];
+
+		// Pick a random response for variety
+		const randomResponse = modelResponses[Math.floor(Math.random() * modelResponses.length)];
+
+		// Add some random content to make responses more realistic
+		const additionalContent = [
+			'\n\nThis response demonstrates how different models might approach the same query with varying perspectives and detail levels.',
+			'\n\nNote: This is a mock response for development testing. Real model responses would provide actual AI-generated content.',
+			'\n\nIn a real implementation, this would contain the actual model output with proper reasoning and analysis.',
+			''
+		];
+
+		return randomResponse + additionalContent[Math.floor(Math.random() * additionalContent.length)];
 	}
 
 	/**
@@ -209,6 +258,34 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					selectionState: this.modelSelectionService.getSelectionState(),
 					availableModels: this.modelSelectionService.getAvailableModels()
 				};
+
+			case 'send-chat-message': {
+				// Handle chat message and generate mock responses
+				if (!message.data?.message || typeof message.data.message !== 'string') {
+					throw new Error('No message provided');
+				}
+
+				const selectedModels = this.modelSelectionService.getSelectedModels();
+				if (selectedModels.length === 0) {
+					throw new Error('No models selected for comparison');
+				}
+
+				// Generate mock responses for each selected model
+				const responses: { [modelId: string]: string } = {};
+				for (const modelId of selectedModels) {
+					responses[modelId] = this.generateMockResponse(modelId, message.data.message);
+				}
+
+				// Simulate some delay to make it feel more realistic
+				await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000));
+
+				return {
+					message: message.data.message,
+					responses,
+					selectedModels,
+					timestamp: Date.now()
+				};
+			}
 
 			default:
 				throw new Error(`Unknown command: ${message.command}`);

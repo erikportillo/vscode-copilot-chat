@@ -163,7 +163,7 @@ const MOCK_MODELS = [
 
 ---
 
-### TASK 1D: Basic Chat Interface with Mock Responses
+### [DONE] TASK 1D: Basic Chat Interface with Mock Responses
 **Objective**: Create chat input and response display using mock data
 
 **Prerequisites**: Task 1C must be completed and tested
