@@ -7,7 +7,10 @@ import { CancellationToken } from '../../../util/vs/base/common/cancellation';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { ChatRequestTurn, ChatResponseTurn } from '../../../vscodeTypes';
+import { PauseController } from '../../intents/node/pauseController';
+import { ComparisonToolCoordinator, IComparisonToolState } from './comparisonToolCoordinator';
 import { SingleModelChatHandler } from './singleModelChatHandler';
+import { IToolCallDetection, ToolCallDetectionService } from './toolCallDetectionService';
 
 /**
  * Response from a single model chat request
@@ -32,24 +35,69 @@ export type StreamingProgressCallback = (modelId: string, chunk: string) => void
  * 1. Sending identical chat requests to multiple AI models concurrently
  * 2. Handling streaming responses from each model independently
  * 3. Aggregating responses while preserving individual model context
+ * 4. Coordinating tool execution control across all models
  *
  * Key implementation details:
  * - Uses SingleModelChatHandler instances that route through ChatParticipantRequestHandler
  * - Model selection works by creating LanguageModelChat objects with vendor: 'copilot'
  * - The endpoint provider matches models by id, version, and family to route to correct endpoints
  * - Supports both streaming and non-streaming response aggregation
+ * - Includes tool call detection and pause coordination for user approval
  *
  * @see SingleModelChatHandler for individual model request handling
  * @see ResponseAggregator for response synchronization logic
+ * @see ComparisonToolCoordinator for tool execution control
  */
 export class ComparisonChatOrchestrator extends Disposable {
 
 	private readonly chatHandlers = new Map<string, SingleModelChatHandler>();
+	private readonly toolCoordinator: ComparisonToolCoordinator;
+	private readonly toolDetectionService: ToolCallDetectionService;
+	private readonly modelPauseControllers = new Map<string, PauseController>();
 
 	constructor(
 		private readonly instantiationService: IInstantiationService
 	) {
 		super();
+
+		// Initialize tool coordination services
+		this.toolCoordinator = this._register(new ComparisonToolCoordinator());
+		this.toolDetectionService = this._register(new ToolCallDetectionService());
+
+		// Set up tool call detection
+		this._register(this.toolDetectionService.onToolCallDetected(detection => {
+			this.handleToolCallDetection(detection);
+		}));
+	}
+
+	/**
+	 * Get the tool coordinator for external access
+	 */
+	public getToolCoordinator(): ComparisonToolCoordinator {
+		return this.toolCoordinator;
+	}
+
+	/**
+	 * Get current tool state for UI updates
+	 */
+	public getCurrentToolState(): IComparisonToolState {
+		return this.toolCoordinator.getCurrentToolState();
+	}
+
+	/**
+	 * Handle tool call detection from any model
+	 */
+	private handleToolCallDetection(detection: IToolCallDetection): void {
+		console.log(`🔧 [${detection.modelId}] Requesting ${detection.toolCalls.length} tool calls`);
+
+		// Update the tool coordinator with the detected tool calls
+		this.toolCoordinator.updateModelToolCalls(detection.modelId, detection.toolCalls);
+
+		// Pause the specific model that wants to call tools
+		if (this.toolCoordinator.hasToolCallsPending()) {
+			console.log(`⏸️ [${detection.modelId}] Paused for tool approval`);
+			this.toolCoordinator.pauseModel(detection.modelId);
+		}
 	}
 
 	/**
@@ -92,13 +140,44 @@ export class ComparisonChatOrchestrator extends Disposable {
 				this.chatHandlers.set(modelId, handler);
 			}
 
-			// Create individual progress callback for this model
+			// Create or get pause controller for this model
+			let pauseController = this.modelPauseControllers.get(modelId);
+			if (!pauseController) {
+				// Use model-specific pause event instead of shared event
+				pauseController = this._register(new PauseController(
+					this.toolCoordinator.getModelPauseEvent(modelId),
+					cancellationToken
+				));
+				this.modelPauseControllers.set(modelId, pauseController);
+				this.toolCoordinator.registerModel(modelId, pauseController);
+			}
+
+			// Create enhanced progress callback that also detects tool calls
 			const modelProgressCallback = onProgress
-				? (chunk: string) => onProgress(modelId, chunk)
-				: undefined;
+				? (chunk: string) => {
+					// First, call the original progress callback
+					onProgress(modelId, chunk);
+					// Then, process the chunk for tool call detection
+					this.toolDetectionService.processResponseChunk(modelId, chunk, undefined);
+				}
+				: (chunk: string) => {
+					// Even without external progress callback, still detect tool calls
+					this.toolDetectionService.processResponseChunk(modelId, chunk, undefined);
+				};
 
 			// Get model metadata for this model
 			const modelMetadata = modelMetadataMap?.get(modelId);
+
+			// Create delta callback for tool call detection
+			const modelDeltaCallback = (modelId: string, text: string, delta: any) => {
+				// Process the delta for tool call detection
+				this.toolDetectionService.processResponseChunk(modelId, text, delta);
+			};
+
+			// Create completion callback that marks tool execution as completed
+			const modelCompletionCallback = (completedModelId: string) => {
+				this.toolCoordinator.markToolExecutionCompleted(completedModelId);
+			};
 
 			// Start the chat request for this model
 			const chatPromise = this.handleSingleModelRequest(
@@ -106,9 +185,11 @@ export class ComparisonChatOrchestrator extends Disposable {
 				modelId,
 				message,
 				history,
-				cancellationToken,
+				pauseController, // Use pause controller instead of cancellation token directly
 				modelProgressCallback,
-				modelMetadata
+				modelMetadata,
+				modelDeltaCallback,
+				modelCompletionCallback
 			);
 
 			chatPromises.push(chatPromise);
@@ -149,9 +230,11 @@ export class ComparisonChatOrchestrator extends Disposable {
 		modelId: string,
 		message: string,
 		history: ReadonlyArray<ChatRequestTurn | ChatResponseTurn>,
-		cancellationToken: CancellationToken,
+		pauseController: PauseController,
 		onProgress?: (chunk: string) => void,
-		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string }
+		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string },
+		onDelta?: (modelId: string, text: string, delta: any) => void,
+		onCompletion?: (modelId: string) => void
 	): Promise<ModelChatResponse> {
 
 		const timestamp = Date.now();
@@ -161,9 +244,11 @@ export class ComparisonChatOrchestrator extends Disposable {
 				modelId,
 				message,
 				history,
-				cancellationToken,
+				pauseController, // Pass the pause controller
 				onProgress,
-				modelMetadata
+				modelMetadata,
+				onDelta,
+				onCompletion
 			);
 
 			return {
@@ -209,6 +294,16 @@ export class ComparisonChatOrchestrator extends Disposable {
 			handler.dispose();
 		}
 		this.chatHandlers.clear();
+
+		// Also clear pause controllers and unregister from tool coordinator
+		for (const [modelId, pauseController] of this.modelPauseControllers) {
+			this.toolCoordinator.unregisterModel(modelId);
+			pauseController.dispose();
+		}
+		this.modelPauseControllers.clear();
+
+		// Clear tool detection buffers
+		this.toolDetectionService.clearAllBuffers();
 	}
 
 	/**

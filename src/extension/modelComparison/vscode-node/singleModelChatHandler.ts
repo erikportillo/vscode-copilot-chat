@@ -13,7 +13,10 @@ import { generateUuid } from '../../../util/vs/base/common/uuid';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { ChatLocation, ChatRequestTurn, ChatResponseMarkdownPart, ChatResponseTurn } from '../../../vscodeTypes';
 import { Intent } from '../../common/constants';
+import { PauseController } from '../../intents/node/pauseController';
 import { ChatParticipantRequestHandler, IChatAgentArgs } from '../../prompt/node/chatParticipantRequestHandler';
+import { getContributedToolName } from '../../tools/common/toolNames';
+import { IToolsService } from '../../tools/common/toolsService';
 
 /**
  * Simple ChatRequest implementation for model comparison
@@ -49,6 +52,7 @@ class ModelComparisonChatRequest implements ChatRequest {
 export class SingleModelChatHandler implements IDisposable {
 
 	private _isDisposed = false;
+	private _endpointCache = new Map<string, any>();
 
 	constructor(
 		private readonly instantiationService: IInstantiationService
@@ -60,16 +64,20 @@ export class SingleModelChatHandler implements IDisposable {
 	 * @param message The user's message
 	 * @param history Previous chat history (optional)
 	 * @param cancellationToken Cancellation token for the request
+	 * @param onProgress Optional streaming progress callback for text chunks
 	 * @param modelMetadata Optional model metadata to create the LanguageModelChat object
+	 * @param onDelta Optional callback for streaming delta with tool calls
 	 * @returns Promise that resolves when the response is complete
 	 */
 	async sendChatMessage(
 		modelId: string,
 		message: string,
 		history: ReadonlyArray<ChatRequestTurn | ChatResponseTurn> = [],
-		cancellationToken: CancellationToken,
+		cancellationToken: CancellationToken | PauseController,
 		onProgress?: (chunk: string) => void,
-		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string }
+		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string },
+		onDelta?: (modelId: string, text: string, delta: any) => void,
+		onCompletion?: (modelId: string) => void
 	): Promise<{ response: string; error?: string }> {
 
 		if (this._isDisposed) {
@@ -83,24 +91,125 @@ export class SingleModelChatHandler implements IDisposable {
 			// If we have model metadata, create a proper LanguageModelChat object
 			if (modelMetadata) {
 				// Create LanguageModelChat with vendor: 'copilot' - this is crucial for proper model routing
-				// The endpoint provider uses vendor: 'copilot' to route through ModelMetadataFetcher.getChatModelFromApiModel()
-				// which matches models by id, version, and family properties to resolve to the correct endpoint
-				const languageModelChat: any = {
-					id: modelMetadata.id,
-					name: modelMetadata.name,
-					vendor: 'copilot',
-					family: modelMetadata.family || modelMetadata.id,
-					version: modelMetadata.version || '1.0.0'
-				};
+				// Cache the model object to avoid repeated creation overhead
+				const modelCacheKey = JSON.stringify(modelMetadata);
+				let languageModelChat = this._endpointCache.get(modelCacheKey);
+
+				if (!languageModelChat) {
+					languageModelChat = {
+						id: modelMetadata.id,
+						name: modelMetadata.name,
+						vendor: 'copilot',
+						family: modelMetadata.family || modelMetadata.id,
+						version: modelMetadata.version || '1.0.0'
+					};
+					this._endpointCache.set(modelCacheKey, languageModelChat);
+				}
+
 				chatRequest.model = languageModelChat;
 			}
+
+			// First populate the tools map with VS Code's default tool selections
+			// This is what VS Code does automatically for regular chat requests
+			await this.instantiationService.invokeFunction(async accessor => {
+				const toolsService = accessor.get<IToolsService>(IToolsService);
+
+				// Get all available tools from VS Code
+				const allTools = toolsService.tools;
+
+				// Enable tools that would be enabled by default in VS Code
+				// This includes tools in toolsets or marked as canBeReferencedInPrompt
+				for (const tool of allTools) {
+					// Enable contributed tools (these come from VS Code's contribution system)
+					const contributedName = getContributedToolName(tool.name);
+					if (contributedName && contributedName.startsWith('copilot_')) {
+						chatRequest.tools.set(contributedName, true);
+					}
+				}
+			});
+
+			// Now use the same tool selection logic as the AgentIntent to get all available tools
+			// This ensures we get the same tools as the regular chat panel
+			const enabledTools = await this.instantiationService.invokeFunction(async accessor => {
+				// Import the getAgentTools function from agentIntent.ts
+				const { getAgentTools } = await import('../../intents/node/agentIntent');
+				return await getAgentTools(this.instantiationService, chatRequest);
+			});
+
+			// Ensure all enabled tools are marked in the tools map
+			for (const tool of enabledTools) {
+				const contributedName = getContributedToolName(tool.name);
+				if (contributedName) {
+					chatRequest.tools.set(contributedName, true);
+				}
+			}
+
+			console.log(`[SingleModelChatHandler] Enabled ${enabledTools.length} tools for ${modelId}:`, enabledTools.map((tool: any) => tool.name));
+			console.log(`[SingleModelChatHandler] Total tools in chatRequest.tools map for ${modelId}:`, chatRequest.tools.size);
+			console.log(`[SingleModelChatHandler] Tools map contents for ${modelId}:`, Array.from(chatRequest.tools.entries()));
 
 			// Create a response stream that captures the output
 			let responseContent = '';
 
 			const responseStream = new ChatResponseStreamImpl(
 				(part: ExtendedChatResponsePart) => {
-					// Handle different types of response parts
+					// Enhanced logging to understand what we're receiving
+					const partDetails = {
+						constructor: part.constructor.name,
+						keys: Object.keys(part),
+						toolName: (part as any).toolName,
+						kind: (part as any).kind,
+						type: (part as any).type,
+						name: (part as any).name,
+						id: (part as any).id,
+						callId: (part as any).callId,
+						hasValue: 'value' in part,
+						hasText: 'text' in part,
+						hasContent: 'content' in part
+					};
+					// Only log significant parts like tool calls, not every streaming chunk
+					if ((part as any).toolName || partDetails.keys.length > 3) {
+						console.log(`📡 [${modelId}] Response part:`, partDetails.keys.join(', '));
+					}
+
+					// Check for tool call parts - based on the log, look for toolName property
+					if ((part as any).toolName) {
+						console.log(`🔧 [${modelId}] Tool call: ${(part as any).toolName}`);
+						if (onDelta) {
+							// Create a structured delta with tool calls
+							const toolCallDelta = {
+								copilotToolCalls: [{
+									id: (part as any).id || (part as any).callId || `tool_call_${Date.now()}`,
+									name: (part as any).toolName,
+									arguments: (part as any).arguments || JSON.stringify((part as any).input || {})
+								}]
+							};
+							onDelta(modelId, '', toolCallDelta);
+						} else {
+							console.log(`[SingleModelChatHandler] *** NO onDelta CALLBACK *** for ${modelId}`);
+						}
+						// Still continue processing - don't return early to avoid breaking streaming
+					}
+
+					// Check for other tool call indicators
+					if ((part as any).kind === 'toolCall' || (part as any).type === 'toolCall') {
+						console.log(`[SingleModelChatHandler] Found tool call part (kind/type) for ${modelId}:`, part);
+						if (onDelta) {
+							// Create a structured delta with tool calls
+							const toolCallDelta = {
+								copilotToolCalls: [{
+									id: (part as any).id || (part as any).callId || `tool_call_${Date.now()}`,
+									name: (part as any).name || (part as any).toolName,
+									arguments: (part as any).arguments || JSON.stringify((part as any).input || {})
+								}]
+							};
+							console.log(`[SingleModelChatHandler] Created tool call delta (kind/type) for ${modelId}:`, toolCallDelta);
+							onDelta(modelId, '', toolCallDelta);
+						}
+						// Still continue processing - don't return early to avoid breaking streaming
+					}
+
+					// Handle different types of response parts for text content
 					let content: string | undefined;
 					if (part instanceof ChatResponseMarkdownPart) {
 						content = typeof part.value === 'string' ? part.value : part.value.value;
@@ -131,10 +240,13 @@ export class SingleModelChatHandler implements IDisposable {
 					}
 
 					if (content) {
-						console.log(`[SingleModelChatHandler] Extracted content for ${modelId}:`, content);
 						responseContent += content;
 						if (onProgress) {
 							onProgress(content);
+						}
+						// Call the delta callback with just the text for now (no structured delta available here)
+						if (onDelta) {
+							onDelta(modelId, content, undefined);
 						}
 					}
 				},
@@ -147,24 +259,48 @@ export class SingleModelChatHandler implements IDisposable {
 			const chatAgentArgs: IChatAgentArgs = {
 				agentName: 'copilot',
 				agentId: getChatParticipantIdFromName('copilot'),
-				intentId: Intent.Unknown // Let the system auto-detect intent
+				intentId: Intent.Agent // Use agent mode to get tool usage instructions
 			};
 
-			// Create the ChatParticipantRequestHandler
+			// Create pause events from the cancellation token if it's a PauseController
+			const pauseEvents = (cancellationToken as any).onDidChangePause
+				? (cancellationToken as any).onDidChangePause
+				: Event.None;
+
+			// Set up pause event listener for tool approval workflow
+			if ((cancellationToken as any).onDidChangePause) {
+				(cancellationToken as any).onDidChangePause((isPaused: boolean) => {
+					if (isPaused) {
+						console.log(`⏸️ [${modelId}] Paused for tool approval`);
+					} else {
+						console.log(`▶️ [${modelId}] Resumed execution`);
+					}
+				});
+			}
+
+			// Extract the underlying CancellationToken if we have a PauseController
+			const actualCancellationToken = (cancellationToken as any).token ?? cancellationToken;
+
+			// Create the request handler
 			const requestHandler = this.instantiationService.createInstance(
 				ChatParticipantRequestHandler,
 				history,
 				chatRequest,
 				responseStream,
-				cancellationToken,
+				actualCancellationToken,
 				chatAgentArgs,
-				Event.None // No pause events for single model handler
+				pauseEvents
 			);
 
 			// Execute the request and wait for completion
-			console.log(`[SingleModelChatHandler] Starting request for model ${modelId} with message: "${message}"`);
+			console.log(`🤖 [${modelId}] Starting chat request`);
 			await requestHandler.getResult();
-			console.log(`[SingleModelChatHandler] Completed request for model ${modelId}, response length: ${responseContent.length}`);
+			console.log(`✅ [${modelId}] Completed (${responseContent.length} chars)`);
+
+			// Call completion callback if provided
+			if (onCompletion) {
+				onCompletion(modelId);
+			}
 
 			// Return the accumulated response
 			return {
@@ -187,5 +323,6 @@ export class SingleModelChatHandler implements IDisposable {
 	 */
 	dispose(): void {
 		this._isDisposed = true;
+		this._endpointCache.clear();
 	}
 }

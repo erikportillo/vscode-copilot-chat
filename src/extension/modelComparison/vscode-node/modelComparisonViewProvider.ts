@@ -26,6 +26,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 	private readonly comparisonChatOrchestrator: ComparisonChatOrchestrator;
 	private readonly responseAggregator: ResponseAggregator;
 	private modelMetadataMap: Map<string, { id: string; name: string; family?: string; version?: string; vendor?: string }> = new Map();
+	private webview?: vscode.Webview;
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
@@ -48,11 +49,27 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 		this.responseAggregator = this._register(new ResponseAggregator());
 	}
 
+	/**
+	 * Set up tool state change listening for a webview
+	 */
+	private setupToolStateListener(webview: vscode.Webview): void {
+		// Listen for tool state changes and notify the webview
+		this._register(this.comparisonChatOrchestrator.getToolCoordinator().onDidChangeToolState(toolState => {
+			webview.postMessage({
+				command: 'tool-state-changed',
+				data: { toolState }
+			});
+		}));
+	}
+
 	public resolveWebviewView(
 		webviewView: vscode.WebviewView,
 		context: vscode.WebviewViewResolveContext,
 		_token: vscode.CancellationToken,
 	): void {
+		// Store the webview for streaming updates
+		this.webview = webviewView.webview;
+
 		webviewView.webview.options = {
 			// Allow scripts in the webview
 			enableScripts: true,
@@ -66,6 +83,9 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 		// Set up message handling
 		this.setupMessageHandling(webviewView.webview);
+
+		// Set up tool state listening
+		this.setupToolStateListener(webviewView.webview);
 
 		// Initialize the model metadata cache immediately
 		this.updateModelMetadataCache().catch(error => {
@@ -119,6 +139,21 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						<div class="selection-controls">
 							<button id="reset-selection" class="secondary-button" title="Reset to default model selection">Reset</button>
 							<button id="clear-all" class="secondary-button" title="Reduce to minimal selection">Clear</button>
+						</div>
+					</div>
+
+					<!-- Tool Call Preview Section -->
+					<div class="tool-call-preview" id="tool-call-preview" style="display: none;">
+						<div class="tool-call-header">
+							<h3>🔧 Tool Calls Detected</h3>
+							<p>The models want to execute tools. Review and approve:</p>
+						</div>
+						<div class="tool-call-content" id="tool-call-content">
+							<!-- Tool call details will be populated by JavaScript -->
+						</div>
+						<div class="tool-call-actions">
+							<button id="approve-tools" class="primary-button">✅ Approve All</button>
+							<button id="cancel-tools" class="danger-button">❌ Cancel</button>
 						</div>
 					</div>
 
@@ -347,7 +382,64 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					availableModels: this.modelSelectionService.getAvailableModels()
 				};
 
-			case 'send-chat-message': {
+			case 'get-tool-state': {
+				// Get current tool state from the orchestrator
+				const toolState = this.comparisonChatOrchestrator.getCurrentToolState();
+				return {
+					toolState
+				};
+			}
+
+			case 'approve-tools': {
+				// Approve all tool calls and resume execution
+				this.comparisonChatOrchestrator.getToolCoordinator().resumeAllModels();
+				return {
+					success: true,
+					message: 'All tool calls approved and resumed'
+				};
+			}
+
+			case 'cancel-tools': {
+				// Cancel all tool execution
+				this.comparisonChatOrchestrator.getToolCoordinator().cancelAllToolExecution();
+				return {
+					success: true,
+					message: 'All tool calls cancelled'
+				};
+			}
+
+			case 'approve-model-tools': {
+				// Approve tool calls for a specific model
+				const { modelId } = message.data;
+				if (!modelId) {
+					return {
+						success: false,
+						message: 'Model ID is required'
+					};
+				}
+				this.comparisonChatOrchestrator.getToolCoordinator().resumeModel(modelId);
+				return {
+					success: true,
+					message: `Tool calls approved for model ${modelId}`
+				};
+			}
+
+			case 'cancel-model-tools': {
+				// Cancel tool calls for a specific model
+				const { modelId } = message.data;
+				if (!modelId) {
+					return {
+						success: false,
+						message: 'Model ID is required'
+					};
+				}
+				// Use the proper cancellation method
+				this.comparisonChatOrchestrator.getToolCoordinator().cancelModelToolExecution(modelId);
+				return {
+					success: true,
+					message: `Tool calls cancelled for model ${modelId}`
+				};
+			} case 'send-chat-message': {
 				// Handle chat message using the new multi-model orchestrator
 				if (!message.data?.message || typeof message.data.message !== 'string') {
 					throw new Error('No message provided');
@@ -389,8 +481,17 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						clonedRequest.history,
 						cancellationToken,
 						(modelId: string, chunk: string) => {
-							// Stream progress callback - for now just log it
-							console.log(`Streaming chunk for ${modelId}:`, chunk);
+							// Stream progress callback - send real-time updates to webview
+							if (this.webview) {
+								this.webview.postMessage({
+									command: 'streaming-chunk',
+									data: {
+										modelId,
+										chunk,
+										requestId: clonedRequest.requestId
+									}
+								});
+							}
 						},
 						this.modelMetadataMap // Use the cached model metadata map
 					);

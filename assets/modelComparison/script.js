@@ -33,17 +33,20 @@
 			// Store the promise resolvers for when we get a response
 			pendingRequests.set(id, { resolve, reject });
 
-			// Set a timeout to prevent hanging requests
+			// Set a timeout to prevent hanging requests (120 seconds for agent mode with tools)
 			setTimeout(() => {
 				if (pendingRequests.has(id)) {
 					pendingRequests.delete(id);
-					reject(new Error(`Request ${id} timed out after 10 seconds`));
+					reject(new Error(`Request ${id} timed out after 120 seconds`));
 				}
-			}, 10000);
+			}, 120000);
 
 			try {
 				vscode.postMessage(message);
-				console.log('Sent message to extension:', message);
+				// Only log non-routine messages
+				if (!['get-available-models', 'get-selected-models', 'ping'].includes(command)) {
+					console.log(`📤 ${command}:`, data);
+				}
 			} catch (error) {
 				pendingRequests.delete(id);
 				reject(error);
@@ -57,7 +60,14 @@
 	 */
 	function handleMessage(event) {
 		const message = event.data;
-		console.log('Received message from extension:', message);
+
+		// Only log important messages to reduce noise
+		const routineMessages = ['streaming-chunk', 'pong'];
+		const responseMessages = message.id && pendingRequests.has(message.id);
+
+		if (!routineMessages.includes(message.command) && !responseMessages) {
+			console.log(`📨 ${message.command}:`, message.data ? Object.keys(message.data) : '');
+		}
 
 		try {
 			if (!message || typeof message !== 'object') {
@@ -91,6 +101,20 @@
 				case 'test-notification':
 					// Handle test notifications from extension
 					showNotification(message.data?.text || 'Test notification from extension');
+					break;
+
+				case 'tool-state-changed':
+					// Handle tool state changes from extension
+					if (message.data?.toolState) {
+						updateToolCallPreview(message.data.toolState);
+					}
+					break;
+
+				case 'streaming-chunk':
+					// Handle streaming chunk updates
+					if (message.data?.modelId && message.data?.chunk) {
+						handleStreamingChunk(message.data.modelId, message.data.chunk, message.data.requestId);
+					}
 					break;
 
 				default:
@@ -149,6 +173,59 @@
 		messages: [],
 		isLoading: false
 	};
+
+	/**
+	 * State management for tool calls
+	 */
+	const toolCallState = {
+		isPreviewVisible: false,
+		toolCallPreviews: [],
+		canApprove: false,
+		canCancel: false
+	};
+
+	/**
+	 * Streaming progress tracking
+	 */
+	const streamingStats = {
+		modelProgress: new Map(), // modelId -> { chunks: number, totalChars: number, lastUpdate: timestamp }
+		debugMode: false // Set to true for detailed streaming logs
+	};
+
+	/**
+	 * Track streaming progress in a more elegant way
+	 */
+	function trackStreamingProgress(modelId, chunkLength) {
+		if (!streamingStats.modelProgress.has(modelId)) {
+			streamingStats.modelProgress.set(modelId, { chunks: 0, totalChars: 0, lastUpdate: Date.now() });
+		}
+
+		const progress = streamingStats.modelProgress.get(modelId);
+		progress.chunks++;
+		progress.totalChars += chunkLength;
+		progress.lastUpdate = Date.now();
+
+		// Only log significant progress milestones
+		if (streamingStats.debugMode || progress.chunks % 10 === 0) {
+			console.log(`📡 ${modelId}: ${progress.chunks} chunks, ${progress.totalChars} chars`);
+		}
+	}
+
+	/**
+	 * Get streaming summary for debugging
+	 */
+	function getStreamingSummary() {
+		const summary = {};
+		for (const [modelId, progress] of streamingStats.modelProgress.entries()) {
+			summary[modelId] = {
+				chunks: progress.chunks,
+				chars: progress.totalChars,
+				avgChunkSize: Math.round(progress.totalChars / progress.chunks),
+				lastUpdate: new Date(progress.lastUpdate).toLocaleTimeString()
+			};
+		}
+		return summary;
+	}
 
 	/**
 	 * Load available models from the extension
@@ -386,23 +463,32 @@
 			};
 
 			chatState.messages.push(userMessage);
+
+			// Create streaming assistant message immediately
+			const assistantMessage = {
+				id: Date.now() + 1,
+				type: 'assistant',
+				content: message,
+				responses: {},
+				errors: {},
+				selectedModels: modelSelectionState.selectedModels,
+				timestamp: Date.now(),
+				streamingResponses: {},
+				isStreaming: true
+			};
+
+			chatState.messages.push(assistantMessage);
 			updateChatUI();
 
 			// Send message to extension and get responses
 			const response = await sendMessage('send-chat-message', { message });
 
-			// Add assistant responses to chat
-			const assistantMessage = {
-				id: Date.now() + 1,
-				type: 'assistant',
-				content: message,
-				responses: response.responses,
-				errors: response.errors, // Include errors in the message
-				selectedModels: response.selectedModels,
-				timestamp: response.timestamp
-			};
-
-			chatState.messages.push(assistantMessage);
+			// Update assistant message with final responses
+			assistantMessage.responses = response.responses;
+			assistantMessage.errors = response.errors;
+			assistantMessage.selectedModels = response.selectedModels;
+			assistantMessage.timestamp = response.timestamp;
+			assistantMessage.isStreaming = false;
 
 		} catch (error) {
 			console.error('Failed to send chat message:', error);
@@ -418,6 +504,35 @@
 	 */
 	function clearChat() {
 		chatState.messages = [];
+		updateChatUI();
+	}
+
+	/**
+	 * Handle streaming chunk updates from the extension
+	 */
+	function handleStreamingChunk(modelId, chunk, requestId) {
+		// Track streaming progress more elegantly
+		trackStreamingProgress(modelId, chunk.length);
+
+		// Find the current loading assistant message
+		const currentMessage = chatState.messages[chatState.messages.length - 1];
+		if (!currentMessage || currentMessage.type !== 'assistant' || !chatState.isLoading) {
+			console.warn('No active assistant message to update with streaming chunk');
+			return;
+		}
+
+		// Initialize streaming responses if not exists
+		if (!currentMessage.streamingResponses) {
+			currentMessage.streamingResponses = {};
+		}
+
+		// Append chunk to the model's streaming response
+		if (!currentMessage.streamingResponses[modelId]) {
+			currentMessage.streamingResponses[modelId] = '';
+		}
+		currentMessage.streamingResponses[modelId] += chunk;
+
+		// Update the UI to show the streaming content
 		updateChatUI();
 	}
 
@@ -459,10 +574,8 @@
 			}
 		});
 
-		// Show loading indicator if needed
-		if (chatState.isLoading) {
-			renderLoadingMessage(chatMessages);
-		}
+		// Note: We no longer render a separate loading message since streaming
+		// is handled within the assistant message itself
 
 		// Scroll to bottom
 		chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -532,10 +645,31 @@
 				errorDiv.textContent = `Error: ${errorText}`;
 				content.appendChild(errorDiv);
 			} else {
-				// Show response text
+				// Show response text - prioritize streaming content if available
 				const text = document.createElement('div');
 				text.className = 'model-response-text';
-				text.textContent = responseText || 'No response';
+
+				// Use streaming content if available and currently streaming, otherwise use final response
+				const streamingText = message.streamingResponses?.[modelId];
+				const finalText = responseText;
+
+				if (message.isStreaming && streamingText) {
+					// Show streaming content with typing indicator
+					text.textContent = streamingText;
+					text.classList.add('streaming');
+				} else if (finalText) {
+					// Show final response
+					text.textContent = finalText;
+					text.classList.remove('streaming');
+				} else if (message.isStreaming) {
+					// Show loading indicator if streaming but no content yet
+					text.textContent = 'Thinking...';
+					text.classList.add('loading');
+				} else {
+					// No response available
+					text.textContent = 'No response';
+				}
+
 				content.appendChild(text);
 			}
 
@@ -611,10 +745,268 @@
 	}
 
 	/**
+	 * Update tool call preview based on tool state from extension
+	 */
+	function updateToolCallPreview(toolState) {
+		// Show the preview if there are any tool call previews, regardless of pause state
+		// This allows individual model approval even when not all models are paused
+		toolCallState.isPreviewVisible = toolState.toolCallPreviews.length > 0;
+		toolCallState.toolCallPreviews = toolState.toolCallPreviews || [];
+		toolCallState.canApprove = toolState.canResume || false;
+		toolCallState.canCancel = toolState.canCancel || false;
+
+		renderToolCallPreview();
+	}
+
+	/**
+	 * Render the tool call preview UI
+	 */
+	function renderToolCallPreview() {
+		const previewContainer = document.getElementById('tool-call-preview');
+		const previewContent = document.getElementById('tool-call-content');
+		const approveButton = document.getElementById('approve-tools');
+		const cancelButton = document.getElementById('cancel-tools');
+
+		if (!previewContainer || !previewContent) {
+			return;
+		}
+
+		// Show or hide the preview based on state
+		previewContainer.style.display = toolCallState.isPreviewVisible ? 'block' : 'none';
+
+		// Update button states
+		if (approveButton) {
+			approveButton.disabled = !toolCallState.canApprove;
+		}
+		if (cancelButton) {
+			cancelButton.disabled = !toolCallState.canCancel;
+		}
+
+		// Clear existing content
+		previewContent.innerHTML = '';
+
+		if (!toolCallState.isPreviewVisible) {
+			return;
+		}
+
+		// Create a more dynamic grid layout for tool approvals
+		const toolGrid = document.createElement('div');
+		toolGrid.className = 'tool-approval-grid';
+
+		toolCallState.toolCallPreviews.forEach((preview, index) => {
+			const model = modelSelectionState.availableModels.find(m => m.id === preview.modelId);
+			const modelName = model?.name || preview.modelId;
+			const modelProvider = model?.provider || '';
+
+			// Create a compact card for each model
+			const modelCard = document.createElement('div');
+			modelCard.className = 'tool-approval-card';
+			modelCard.setAttribute('data-model-id', preview.modelId);
+
+			// Generate summary of tool calls for quick preview
+			const toolSummary = preview.toolCalls.map(call => `${call.name}`).join(', ');
+			const isExpanded = false; // Start collapsed for cleaner UI
+
+			modelCard.innerHTML = `
+				<div class="tool-card-header" data-action="expand">
+					<div class="model-info">
+						<div class="model-name">${escapeHtml(modelName)}</div>
+						<div class="model-provider">${escapeHtml(modelProvider)}</div>
+					</div>
+					<div class="tool-summary">
+						<div class="tool-preview">${escapeHtml(toolSummary)}</div>
+						<div class="tool-count-badge">${preview.toolCalls.length}</div>
+					</div>
+					<div class="expand-indicator">
+						<span class="expand-arrow">▼</span>
+					</div>
+				</div>
+
+				<div class="tool-card-actions">
+					<button class="approve-model-btn quick-approve" data-model-id="${escapeHtml(preview.modelId)}" title="Approve all tools for ${escapeHtml(modelName)}">
+						<span class="btn-icon">✅</span>
+						<span class="btn-text">Approve</span>
+					</button>
+					<button class="cancel-model-btn quick-cancel" data-model-id="${escapeHtml(preview.modelId)}" title="Cancel all tools for ${escapeHtml(modelName)}">
+						<span class="btn-icon">❌</span>
+						<span class="btn-text">Cancel</span>
+					</button>
+				</div>
+
+				<div class="tool-details" style="display: none;">
+					<div class="tool-details-header">
+						<span>Tool Details</span>
+						<button class="details-close" data-action="collapse" title="Collapse details">×</button>
+					</div>
+					<div class="tool-call-list">
+						${preview.toolCalls.map(toolCall => {
+				// Parse arguments safely
+				let parsedArgs;
+				try {
+					parsedArgs = typeof toolCall.arguments === 'string'
+						? JSON.parse(toolCall.arguments)
+						: toolCall.arguments;
+				} catch (e) {
+					parsedArgs = toolCall.arguments;
+				}
+
+				// Create a more compact representation of arguments
+				const argsPreview = JSON.stringify(parsedArgs, null, 2);
+				const shortArgs = argsPreview.length > 100
+					? argsPreview.substring(0, 100) + '...'
+					: argsPreview;
+
+				return `
+								<div class="tool-call-compact">
+									<div class="tool-call-header">
+										<span class="tool-name">🔧 ${escapeHtml(toolCall.name)}</span>
+										<span class="tool-id">${escapeHtml(toolCall.id.substring(0, 8))}</span>
+									</div>
+									<div class="tool-args-compact">
+										<pre>${escapeHtml(shortArgs)}</pre>
+									</div>
+								</div>
+							`;
+			}).join('')}
+					</div>
+				</div>
+			`;
+
+			toolGrid.appendChild(modelCard);
+		});
+
+		previewContent.appendChild(toolGrid);
+
+		// Add event listeners for individual model approve/cancel buttons
+		previewContent.querySelectorAll('.approve-model-btn').forEach(btn => {
+			btn.onclick = () => approveModelToolCalls(btn.dataset.modelId);
+		});
+
+		previewContent.querySelectorAll('.cancel-model-btn').forEach(btn => {
+			btn.onclick = () => cancelModelToolCalls(btn.dataset.modelId);
+		});
+
+		// Add event listeners for expand/collapse functionality
+		previewContent.querySelectorAll('.tool-card-header[data-action="expand"]').forEach(header => {
+			header.onclick = (e) => {
+				e.preventDefault();
+				const card = header.closest('.tool-approval-card');
+				const modelId = card.getAttribute('data-model-id');
+				toggleToolCardExpansion(modelId);
+			};
+		});
+
+		previewContent.querySelectorAll('.details-close[data-action="collapse"]').forEach(btn => {
+			btn.onclick = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				const card = btn.closest('.tool-approval-card');
+				const modelId = card.getAttribute('data-model-id');
+				toggleToolCardExpansion(modelId);
+			};
+		});
+	}
+
+	/**
+	 * Toggle expansion of tool card details
+	 */
+	function toggleToolCardExpansion(modelId) {
+		const card = document.querySelector(`[data-model-id="${modelId}"]`);
+		if (!card) {
+			console.error(`🔧 Tool card not found: ${modelId}`);
+			return;
+		}
+
+		const details = card.querySelector('.tool-details');
+		const arrow = card.querySelector('.expand-arrow');
+
+		if (!details || !arrow) {
+			console.error(`🔧 Tool card elements missing for: ${modelId}`);
+			return;
+		}
+
+		const isExpanded = details.style.display !== 'none';
+		const action = isExpanded ? 'collapsed' : 'expanded';
+
+		// Toggle state
+		if (isExpanded) {
+			details.style.display = 'none';
+			arrow.textContent = '▼';
+			card.classList.remove('expanded');
+		} else {
+			details.style.display = 'block';
+			arrow.textContent = '▲';
+			card.classList.add('expanded');
+		}
+
+		// Single clean log line
+		console.log(`🔧 Tool card ${action}: ${modelId}`);
+	}	// Make function globally available
+	window.toggleToolCardExpansion = toggleToolCardExpansion;
+
+	/**
+	 * Approve all tool calls
+	 */
+	async function approveToolCalls() {
+		try {
+			await sendMessage('approve-tools');
+			showNotification('✅ All tool calls approved and executing');
+		} catch (error) {
+			console.error('Failed to approve tool calls:', error);
+			showErrorMessage('Failed to approve tool calls: ' + error.message);
+		}
+	}
+
+	/**
+	 * Cancel all tool calls
+	 */
+	async function cancelToolCalls() {
+		try {
+			await sendMessage('cancel-tools');
+			showNotification('❌ All tool calls cancelled');
+		} catch (error) {
+			console.error('Failed to cancel tool calls:', error);
+			showErrorMessage('Failed to cancel tool calls: ' + error.message);
+		}
+	}
+
+	/**
+	 * Approve tool calls for a specific model
+	 */
+	async function approveModelToolCalls(modelId) {
+		try {
+			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+			const modelName = model?.name || modelId;
+
+			await sendMessage('approve-model-tools', { modelId });
+			showNotification(`✅ Tool calls approved for ${modelName}`);
+		} catch (error) {
+			console.error(`Failed to approve tool calls for ${modelId}:`, error);
+			showErrorMessage(`Failed to approve tool calls for ${modelId}: ` + error.message);
+		}
+	}
+
+	/**
+	 * Cancel tool calls for a specific model
+	 */
+	async function cancelModelToolCalls(modelId) {
+		try {
+			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+			const modelName = model?.name || modelId;
+
+			await sendMessage('cancel-model-tools', { modelId });
+			showNotification(`❌ Tool calls cancelled for ${modelName}`);
+		} catch (error) {
+			console.error(`Failed to cancel tool calls for ${modelId}:`, error);
+			showErrorMessage(`Failed to cancel tool calls for ${modelId}: ` + error.message);
+		}
+	}
+
+	/**
 	 * Initialize the webview
 	 */
 	async function init() {
-		console.log('Model Comparison webview initialized');
+		console.log('🚀 Model Comparison initialized');
 
 		// Set up event listeners for control buttons
 		const resetButton = document.getElementById('reset-selection');
@@ -626,6 +1018,18 @@
 
 		if (clearButton) {
 			clearButton.onclick = clearAllModels;
+		}
+
+		// Set up tool call event listeners
+		const approveToolsButton = document.getElementById('approve-tools');
+		const cancelToolsButton = document.getElementById('cancel-tools');
+
+		if (approveToolsButton) {
+			approveToolsButton.onclick = approveToolCalls;
+		}
+
+		if (cancelToolsButton) {
+			cancelToolsButton.onclick = cancelToolCalls;
 		}
 
 		// Set up chat interface event listeners
@@ -676,18 +1080,14 @@
 
 		// Initialize model selection
 		try {
-			console.log('Loading models and selection state...');
-
 			// Load both available models and current selection
 			await Promise.all([
 				loadAvailableModels(),
 				loadSelectedModels()
 			]);
 
-			console.log('Models loaded:', {
-				available: modelSelectionState.availableModels,
-				selected: modelSelectionState.selectedModels
-			});
+			// Only log summary for debugging
+			console.log(`🤖 Initialized: ${modelSelectionState.availableModels.length} available, ${modelSelectionState.selectedModels.length} selected`);
 
 			// Update UI with loaded data
 			updateUI();
@@ -700,11 +1100,8 @@
 
 		// Send initial ping to extension
 		sendMessage('ping', { source: 'webview-init' })
-			.then(response => {
-				console.log('Initial ping response:', response);
-			})
 			.catch(error => {
-				console.error('Initial ping failed:', error);
+				console.error('Connection failed:', error);
 			});
 	}
 
@@ -731,7 +1128,11 @@
 		clearChat,
 		modelSelectionState,
 		chatState,
-		updateUI
+		updateUI,
+		// Debug utilities
+		getStreamingSummary,
+		enableStreamingDebug: () => { streamingStats.debugMode = true; console.log('📡 Streaming debug enabled'); },
+		disableStreamingDebug: () => { streamingStats.debugMode = false; console.log('📡 Streaming debug disabled'); }
 	};
 
 })();

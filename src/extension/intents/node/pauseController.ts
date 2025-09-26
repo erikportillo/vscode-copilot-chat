@@ -32,10 +32,26 @@ export class PauseController extends Disposable implements CancellationToken {
 		this._pausePromise.complete(); // requests are initially unpaused
 
 		this._register(onDidChangePause(isPaused => {
+			console.log('[PauseController] onDidChangePause event received:', {
+				isPaused,
+				currentlyPaused: this.isPaused,
+				promiseSettled: this._pausePromise.isSettled
+			});
+
 			if (isPaused) {
-				this._pausePromise = new DeferredPromise();
+				if (this._pausePromise.isSettled) {
+					console.log('[PauseController] Creating new pause promise - pausing execution');
+					this._pausePromise = new DeferredPromise();
+				} else {
+					console.log('[PauseController] Already paused, ignoring pause event');
+				}
 			} else {
-				this._pausePromise.complete();
+				if (!this._pausePromise.isSettled) {
+					console.log('[PauseController] Completing pause promise - resuming execution');
+					this._pausePromise.complete();
+				} else {
+					console.log('[PauseController] Already resumed, ignoring resume event');
+				}
 			}
 		}));
 
