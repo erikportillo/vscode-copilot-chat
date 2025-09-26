@@ -5,8 +5,11 @@
 
 import * as vscode from 'vscode';
 import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
+import { CancellationTokenSource } from '../../../util/vs/base/common/cancellation';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
+import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { ModelSelectionService } from './modelSelectionService';
+import { SingleModelChatHandler } from './singleModelChatHandler';
 
 /**
  * Provider for the Model Comparison WebView panel
@@ -16,16 +19,21 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 	public static readonly viewType = 'model-comparison-panel';
 
 	private readonly modelSelectionService: ModelSelectionService;
+	private readonly singleModelChatHandler: SingleModelChatHandler;
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		context: vscode.ExtensionContext,
-		endpointProvider: IEndpointProvider
+		endpointProvider: IEndpointProvider,
+		instantiationService: IInstantiationService
 	) {
 		super();
 
 		// Initialize the model selection service with endpoint provider
 		this.modelSelectionService = this._register(new ModelSelectionService(context, endpointProvider));
+
+		// Initialize the single model chat handler
+		this.singleModelChatHandler = this._register(new SingleModelChatHandler(instantiationService));
 	}
 
 	public resolveWebviewView(
@@ -165,6 +173,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 		}));
 	}
 
+
+
 	/**
 	 * Generate mock response for a given model and message
 	 */
@@ -174,28 +184,28 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 		// Generate different mock responses based on the model to simulate differences
 		const responses = {
-			'gpt-5': [
-				`As GPT-5, I'd be happy to help with "${message}". Here's a comprehensive response that demonstrates advanced reasoning capabilities...`,
-				`From a GPT-5 perspective on "${message}": I can provide detailed analysis with multiple viewpoints...`,
-				`GPT-5 analysis of "${message}": Let me break this down systematically with enhanced understanding...`
+			'gpt-4o': [
+				`As GPT-4o, I'd be happy to help with "${message}". Here's a comprehensive response that demonstrates advanced reasoning capabilities...`,
+				`From a GPT-4o perspective on "${message}": I can provide detailed analysis with multiple viewpoints...`,
+				`GPT-4o analysis of "${message}": Let me break this down systematically with enhanced understanding...`
 			],
-			'claude-sonnet-4': [
-				`Claude Sonnet 4 responding to "${message}": I'll approach this thoughtfully with careful consideration...`,
-				`As Claude Sonnet 4, regarding "${message}": I believe a nuanced approach would be most beneficial...`,
-				`Claude Sonnet 4's perspective on "${message}": Let me provide a balanced and thorough response...`
+			'claude-3-5-sonnet-20241022': [
+				`Claude 3.5 Sonnet responding to "${message}": I'll approach this thoughtfully with careful consideration...`,
+				`As Claude 3.5 Sonnet, regarding "${message}": I believe a nuanced approach would be most beneficial...`,
+				`Claude 3.5 Sonnet's perspective on "${message}": Let me provide a balanced and thorough response...`
 			],
-			'gpt-4.1': [
-				`GPT-4.1 here! For "${message}", I can offer this insight based on my training...`,
-				`From GPT-4.1: "${message}" is an interesting query. Here's my analysis...`,
-				`GPT-4.1 response to "${message}": I'll provide a detailed breakdown...`
+			'gpt-4o-mini': [
+				`GPT-4o Mini here! For "${message}", I can offer this insight based on my training...`,
+				`From GPT-4o Mini: "${message}" is an interesting query. Here's my analysis...`,
+				`GPT-4o Mini response to "${message}": I'll provide a concise breakdown...`
 			]
 		};
 
 		// Get model-specific responses or fall back to generic ones
 		const modelResponses = responses[modelId as keyof typeof responses] || [
-			`[${modelName}] Mock response to: "${message}". This is a simulated response for testing purposes.`,
-			`[${modelName}] Analyzing "${message}"... Here's what I think about this query.`,
-			`[${modelName}] Responding to "${message}": This is a mock response to demonstrate the comparison interface.`
+			`Hello! I'm ${modelName}. For your question "${message}", here's my simulated response. This is a mock response for testing purposes.`,
+			`As ${modelName}, I'm analyzing "${message}"... Here's what I would say about this query if I were actually running.`,
+			`${modelName} responding to "${message}": This is a simulated response to demonstrate the comparison interface.`
 		];
 
 		// Pick a random response for variety
@@ -203,9 +213,9 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 		// Add some random content to make responses more realistic
 		const additionalContent = [
-			'\n\nThis response demonstrates how different models might approach the same query with varying perspectives and detail levels.',
-			'\n\nNote: This is a mock response for development testing. Real model responses would provide actual AI-generated content.',
-			'\n\nIn a real implementation, this would contain the actual model output with proper reasoning and analysis.',
+			'\n\n📝 Note: This is a mock response for comparison. Only the first selected model uses real AI.',
+			'\n\n🤖 Mock response for demonstration purposes.',
+			'\n\n💭 This simulates how different models might respond differently.',
 			''
 		];
 
@@ -259,7 +269,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				await this.modelSelectionService.setSelectedModels(message.data.modelIds);
 				return {
 					success: true,
-					selectedModels: this.modelSelectionService.getSelectedModels()
+					selectedModels: await this.modelSelectionService.getSelectedModelsAsync()
 				};
 
 			case 'toggle-model':
@@ -270,7 +280,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				await this.modelSelectionService.toggleModel(message.data.modelId);
 				return {
 					success: true,
-					selectedModels: this.modelSelectionService.getSelectedModels()
+					selectedModels: await this.modelSelectionService.getSelectedModelsAsync()
 				};
 
 			case 'reset-to-defaults':
@@ -278,7 +288,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				await this.modelSelectionService.resetToDefaults();
 				return {
 					success: true,
-					selectedModels: this.modelSelectionService.getSelectedModels()
+					selectedModels: await this.modelSelectionService.getSelectedModelsAsync()
 				};
 
 			case 'clear-all':
@@ -286,7 +296,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				await this.modelSelectionService.clearAll();
 				return {
 					success: true,
-					selectedModels: this.modelSelectionService.getSelectedModels()
+					selectedModels: await this.modelSelectionService.getSelectedModelsAsync()
 				};
 
 			case 'get-selection-state':
@@ -297,29 +307,74 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 				};
 
 			case 'send-chat-message': {
-				// Handle chat message and generate mock responses
+				// Handle chat message and generate real AI responses
 				if (!message.data?.message || typeof message.data.message !== 'string') {
 					throw new Error('No message provided');
 				}
 
-				const selectedModels = this.modelSelectionService.getSelectedModels();
-				if (selectedModels.length === 0) {
+				// Use async method to ensure we get the latest selection
+				const selectedModelsRaw = await this.modelSelectionService.getSelectedModelsAsync();
+				if (selectedModelsRaw.length === 0) {
 					throw new Error('No models selected for comparison');
 				}
 
-				// Generate mock responses for each selected model
-				const responses: { [modelId: string]: string } = {};
-				for (const modelId of selectedModels) {
-					responses[modelId] = this.generateMockResponse(modelId, message.data.message);
-				}
+				// Sort models to ensure consistent ordering regardless of selection order
+				// This prevents confusion when models are added/removed
+				const selectedModels = [...selectedModelsRaw].sort();
 
-				// Simulate some delay to make it feel more realistic
-				await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000));
+				const responses: { [modelId: string]: string } = {};
+				const errors: { [modelId: string]: string } = {};
+
+				// For Task 3: Real response for first model, mock responses for others
+				// This provides a hybrid approach - users can see real AI output while
+				// still being able to compare multiple models visually
+				for (let i = 0; i < selectedModels.length; i++) {
+					const modelId = selectedModels[i];
+
+					if (i === 0) {
+						// Use real AI response for the first selected model
+						// Note: Currently uses system default model, not the specific requested model
+						try {
+							const cancellationTokenSource = new CancellationTokenSource();
+							const cancellationToken = cancellationTokenSource.token;
+
+							const result = await this.singleModelChatHandler.sendChatMessage(
+								modelId,
+								message.data.message,
+								[], // No history for now
+								cancellationToken,
+								(chunk: string) => {
+									// Stream progress callback - for now just log it
+									console.log(`Streaming chunk for ${modelId}:`, chunk);
+								}
+							);
+
+							if (result.error) {
+								errors[modelId] = result.error;
+								responses[modelId] = '';
+							} else {
+								// Add a note to clarify which model is actually being used
+								const modelMetadata = this.modelSelectionService.getAvailableModels().find(m => m.id === modelId);
+								const modelName = modelMetadata?.name || modelId;
+								const responseWithNote = `🤖 **Real AI Response** (using system default model - ${modelName} selection will be supported in Task 4)\n\n${result.response}`;
+								responses[modelId] = responseWithNote;
+							}
+						} catch (error) {
+							const errorMsg = error instanceof Error ? error.message : String(error);
+							errors[modelId] = errorMsg;
+							responses[modelId] = '';
+						}
+					} else {
+						// Generate mock responses for additional models
+						responses[modelId] = this.generateMockResponse(modelId, message.data.message);
+					}
+				}
 
 				return {
 					message: message.data.message,
 					responses,
-					selectedModels,
+					errors,
+					selectedModels, // Return all selected models
 					timestamp: Date.now()
 				};
 			}

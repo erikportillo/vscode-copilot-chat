@@ -233,7 +233,7 @@ function generateMockResponse(model: string, message: string): string {
 
 ---
 
-### TASK 3: Single Model Chat Integration
+### [DONE] TASK 3: Single Model Chat Integration
 **Objective**: Enable real chat with one selected model (not comparison yet)
 
 **Prerequisites**: Task 2 must be completed and tested

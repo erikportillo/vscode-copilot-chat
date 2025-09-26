@@ -397,6 +397,7 @@
 				type: 'assistant',
 				content: message,
 				responses: response.responses,
+				errors: response.errors, // Include errors in the message
 				selectedModels: response.selectedModels,
 				timestamp: response.timestamp
 			};
@@ -500,9 +501,10 @@
 		message.selectedModels.forEach(modelId => {
 			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
 			const responseText = message.responses[modelId];
+			const errorText = message.errors?.[modelId];
 
 			const responseCard = document.createElement('div');
-			responseCard.className = 'model-response';
+			responseCard.className = `model-response ${errorText ? 'error' : ''}`;
 
 			// Response header with model info
 			const header = document.createElement('div');
@@ -523,11 +525,19 @@
 			const content = document.createElement('div');
 			content.className = 'model-response-content';
 
-			const text = document.createElement('div');
-			text.className = 'model-response-text';
-			text.textContent = responseText || 'No response';
-
-			content.appendChild(text);
+			if (errorText) {
+				// Show error message
+				const errorDiv = document.createElement('div');
+				errorDiv.className = 'model-response-error';
+				errorDiv.textContent = `Error: ${errorText}`;
+				content.appendChild(errorDiv);
+			} else {
+				// Show response text
+				const text = document.createElement('div');
+				text.className = 'model-response-text';
+				text.textContent = responseText || 'No response';
+				content.appendChild(text);
+			}
 
 			responseCard.appendChild(header);
 			responseCard.appendChild(content);

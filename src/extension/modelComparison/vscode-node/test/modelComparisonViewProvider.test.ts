@@ -6,6 +6,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { IEndpointProvider } from '../../../../platform/endpoint/common/endpointProvider';
+import { IInstantiationService } from '../../../../util/vs/platform/instantiation/common/instantiation';
 import { ModelComparisonViewProvider } from '../modelComparisonViewProvider';
 
 /**
@@ -51,7 +52,21 @@ export function testModelComparisonViewProvider() {
 		getEmbeddingsEndpoint: async () => ({} as any)
 	};
 
-	const provider = new ModelComparisonViewProvider(vscode.Uri.file('/test'), mockContext, mockEndpointProvider);
+	// Create a mock instantiation service
+	const mockInstantiationService = {
+		createInstance: () => {
+			// Return a mock chat handler
+			return {
+				sendChatMessage: async () => ({ response: 'Mock response', error: undefined }),
+				dispose: () => { }
+			};
+		},
+		invokeFunction: () => { },
+		createChild: () => mockInstantiationService,
+		dispose: () => { }
+	} as any as IInstantiationService;
+
+	const provider = new ModelComparisonViewProvider(vscode.Uri.file('/test'), mockContext, mockEndpointProvider, mockInstantiationService);
 
 	// Test that provider is created properly
 	assert.ok(provider, 'ModelComparisonViewProvider should be created');

@@ -372,6 +372,11 @@ p {
 	overflow: hidden;
 }
 
+.model-response.error {
+	border-color: var(--vscode-inputValidation-errorBorder);
+	background-color: var(--vscode-inputValidation-errorBackground);
+}
+
 .model-response-header {
 	background-color: var(--vscode-editorGroupHeader-tabsBackground);
 	padding: 8px 12px;
@@ -430,5 +435,15 @@ p {
 	display: flex;
 	align-items: center;
 	min-height: 40px;
+}
+
+.model-response-error {
+	color: var(--vscode-inputValidation-errorForeground);
+	background-color: var(--vscode-inputValidation-errorBackground);
+	padding: 8px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-style: italic;
+	border: 1px solid var(--vscode-inputValidation-errorBorder);
 }
 
