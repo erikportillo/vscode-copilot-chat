@@ -1,0 +1,32 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Basic styles for the Model Comparison panel */
+body {
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+	font-weight: var(--vscode-font-weight);
+	color: var(--vscode-foreground);
+	background-color: var(--vscode-sideBar-background);
+	margin: 0;
+	padding: 0;
+}
+
+.container {
+	padding: 16px;
+}
+
+h1 {
+	color: var(--vscode-panel-title-activeForeground);
+	font-size: 18px;
+	font-weight: 600;
+	margin: 0 0 16px 0;
+}
+
+p {
+	color: var(--vscode-descriptionForeground);
+	margin: 0 0 8px 0;
+	line-height: 1.4;
+}

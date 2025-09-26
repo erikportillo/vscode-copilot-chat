@@ -3846,6 +3846,14 @@
 					"icon": "$(inspect)",
 					"when": "github.copilot.chat.showContextInspectorView"
 				}
+			],
+			"model-comparison": [
+				{
+					"id": "model-comparison-panel",
+					"name": "Model Comparison",
+					"type": "webview",
+					"icon": "$(compare-changes)"
+				}
 			]
 		},
 		"viewsContainers": {
@@ -3859,6 +3867,11 @@
 					"id": "context-inspector",
 					"title": "Language Context Inspector",
 					"icon": "$(inspect)"
+				},
+				{
+					"id": "model-comparison",
+					"title": "Model Comparison",
+					"icon": "$(compare-changes)"
 				}
 			]
 		},
