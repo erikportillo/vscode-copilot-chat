@@ -94,7 +94,7 @@ This implementation follows a **progressive enhancement approach** to ensure eac
 
 ---
 
-### TASK 1B: Message Passing Infrastructure
+### [DONE] TASK 1B: Message Passing Infrastructure
 **Objective**: Enable bidirectional communication between extension and webview
 
 **Prerequisites**: Task 1A must be completed and tested

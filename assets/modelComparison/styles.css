@@ -30,3 +30,42 @@ p {
 	margin: 0 0 8px 0;
 	line-height: 1.4;
 }
+
+.test-button {
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: none;
+	padding: 8px 16px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+	margin: 8px 0;
+}
+
+.test-button:hover {
+	background-color: var(--vscode-button-hoverBackground);
+}
+
+.test-button:active {
+	background-color: var(--vscode-button-background);
+	transform: translateY(1px);
+}
+
+.instructions {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+	margin: 8px 0;
+}
+
+.notification {
+	background-color: var(--vscode-notifications-background);
+	color: var(--vscode-notifications-foreground);
+	border: 1px solid var(--vscode-notifications-border);
+	padding: 8px 12px;
+	margin: 8px 0;
+	border-radius: 4px;
+	font-size: 12px;
+	word-wrap: break-word;
+}
