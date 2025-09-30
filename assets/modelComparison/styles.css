@@ -255,6 +255,55 @@ p {
 	align-items: center;
 }
 
+.chat-actions {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+}
+
+.icon-button {
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: none;
+	padding: 8px;
+	border-radius: 6px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 36px;
+	width: 36px;
+	flex-shrink: 0;
+	transition: background-color 0.1s ease;
+}
+
+.icon-button:hover {
+	background-color: var(--vscode-button-hoverBackground);
+}
+
+.icon-button:active {
+	background-color: var(--vscode-button-background);
+	transform: translateY(1px);
+}
+
+.icon-button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.icon-button svg {
+	pointer-events: none;
+}
+
+.stop-button {
+	background-color: var(--vscode-inputValidation-errorBackground);
+	color: var(--vscode-inputValidation-errorForeground);
+}
+
+.stop-button:hover {
+	background-color: var(--vscode-inputValidation-errorBorder);
+}
+
 #chat-input {
 	flex: 1;
 	min-height: 36px;
@@ -916,6 +965,74 @@ p {
 	white-space: pre-wrap;
 	word-wrap: break-word;
 	max-height: 80px;
+	overflow-y: auto;
+}
+
+/* Tool calls section in response cards */
+.tool-calls-section {
+	margin-bottom: 12px;
+	padding: 8px;
+	background-color: var(--vscode-editor-inactiveSelectionBackground);
+	border-radius: 6px;
+	border-left: 3px solid var(--vscode-symbolIcon-functionForeground);
+}
+
+.tool-calls-header {
+	font-weight: 600;
+	font-size: 12px;
+	color: var(--vscode-symbolIcon-functionForeground);
+	margin-bottom: 8px;
+}
+
+.tool-calls-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.tool-call-item {
+	background-color: var(--vscode-editor-background);
+	border-radius: 4px;
+	padding: 6px 8px;
+	border: 1px solid var(--vscode-input-border);
+}
+
+.tool-call-message {
+	font-size: 11px;
+	color: var(--vscode-foreground);
+	margin-bottom: 4px;
+}
+
+.tool-call-params {
+	margin-top: 4px;
+}
+
+.tool-call-params summary {
+	cursor: pointer;
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+	user-select: none;
+	padding: 2px 4px;
+	border-radius: 3px;
+}
+
+.tool-call-params summary:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
+
+.tool-call-params-content {
+	margin-top: 4px;
+	padding: 6px;
+	background-color: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-input-border);
+	border-radius: 3px;
+	font-family: var(--vscode-editor-font-family);
+	font-size: 10px;
+	line-height: 1.4;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	word-wrap: break-word;
+	max-height: 200px;
 	overflow-y: auto;
 }
 

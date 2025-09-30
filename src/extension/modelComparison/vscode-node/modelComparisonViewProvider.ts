@@ -168,7 +168,18 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					<div class="chat-input-section">
 						<div class="chat-input-container">
 							<textarea id="chat-input" placeholder="Type your message here..." rows="2"></textarea>
-							<button id="send-button" class="primary-button">Send</button>
+							<div class="chat-actions">
+								<button id="stop-button" class="icon-button stop-button" title="Stop all requests" style="display: none;">
+									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+										<rect x="4" y="4" width="8" height="8" />
+									</svg>
+								</button>
+								<button id="send-button" class="icon-button send-button" title="Send message">
+									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+										<path d="M2.5 2l11 6-11 6V9.5l7-1.5-7-1.5V2z"/>
+									</svg>
+								</button>
+							</div>
 						</div>
 					</div>
 
@@ -400,7 +411,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 			}
 
 			case 'cancel-tools': {
-				// Cancel all tool execution
+				// Cancel all tool execution by cancelling the underlying requests
+				this.comparisonChatOrchestrator.cancelAllRequests();
 				this.comparisonChatOrchestrator.getToolCoordinator().cancelAllToolExecution();
 				return {
 					success: true,
@@ -433,7 +445,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						message: 'Model ID is required'
 					};
 				}
-				// Use the proper cancellation method
+				// Cancel the specific model's request
+				this.comparisonChatOrchestrator.cancelModelRequest(modelId);
 				this.comparisonChatOrchestrator.getToolCoordinator().cancelModelToolExecution(modelId);
 				return {
 					success: true,
@@ -493,7 +506,21 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 								});
 							}
 						},
-						this.modelMetadataMap // Use the cached model metadata map
+						this.modelMetadataMap, // Use the cached model metadata map
+						(modelId: string, toolCall: any) => {
+							// Tool call callback - send real-time tool call updates to webview
+							if (this.webview) {
+								console.log(`[ModelComparisonViewProvider] Sending real-time tool call update for ${modelId}:`, toolCall.displayMessage);
+								this.webview.postMessage({
+									command: 'tool-call-update',
+									data: {
+										modelId,
+										toolCall,
+										requestId: clonedRequest.requestId
+									}
+								});
+							}
+						}
 					);
 
 					// Update aggregation with all responses
@@ -508,7 +535,13 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					}
 
 					// Convert to webview format and return
-					return ResponseAggregator.toWebviewFormat(finalAggregated);
+					const webviewData = ResponseAggregator.toWebviewFormat(finalAggregated);
+					console.log('[ModelComparisonViewProvider] Returning webview data with tool calls:',
+						Object.entries(webviewData.toolCalls || {}).map(([modelId, calls]) =>
+							`${modelId}: ${Array.isArray(calls) ? calls.length : 0} calls`
+						).join(', ')
+					);
+					return webviewData;
 
 				} catch (error) {
 					// If the orchestrator fails, fall back to the old single model approach for debugging

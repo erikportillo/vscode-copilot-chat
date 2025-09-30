@@ -117,6 +117,13 @@
 					}
 					break;
 
+				case 'tool-call-update':
+					// Handle real-time tool call updates
+					if (message.data?.modelId && message.data?.toolCall) {
+						handleToolCallUpdate(message.data.modelId, message.data.toolCall, message.data.requestId);
+					}
+					break;
+
 				default:
 					console.warn('Unknown command received:', message.command);
 			}
@@ -451,6 +458,11 @@
 		}
 
 		try {
+			// If there are active requests, cancel them before sending new message
+			if (chatState.isLoading) {
+				await cancelToolCalls();
+			}
+
 			chatState.isLoading = true;
 			updateChatUI();
 
@@ -483,11 +495,14 @@
 			// Send message to extension and get responses
 			const response = await sendMessage('send-chat-message', { message });
 
+			console.log('[ModelComparison] Received response with tool calls:', response.toolCalls);
+
 			// Update assistant message with final responses
 			assistantMessage.responses = response.responses;
 			assistantMessage.errors = response.errors;
 			assistantMessage.selectedModels = response.selectedModels;
 			assistantMessage.timestamp = response.timestamp;
+			assistantMessage.toolCalls = response.toolCalls; // Add tool calls to message
 			assistantMessage.isStreaming = false;
 
 		} catch (error) {
@@ -537,6 +552,39 @@
 	}
 
 	/**
+	 * Handle real-time tool call updates
+	 * @param {string} modelId - The model ID that called the tool
+	 * @param {object} toolCall - The tool call object with displayMessage, toolName, etc.
+	 * @param {string} requestId - The request ID
+	 */
+	function handleToolCallUpdate(modelId, toolCall, requestId) {
+		console.log(`[ModelComparison] Real-time tool call update for ${modelId}:`, toolCall.displayMessage);
+
+		// Find the current loading assistant message
+		const currentMessage = chatState.messages[chatState.messages.length - 1];
+		if (!currentMessage || currentMessage.type !== 'assistant') {
+			console.warn('No active assistant message to update with tool call');
+			return;
+		}
+
+		// Initialize toolCalls object if not exists
+		if (!currentMessage.toolCalls) {
+			currentMessage.toolCalls = {};
+		}
+
+		// Initialize tool calls array for this model if not exists
+		if (!currentMessage.toolCalls[modelId]) {
+			currentMessage.toolCalls[modelId] = [];
+		}
+
+		// Add the tool call to the model's tool calls array
+		currentMessage.toolCalls[modelId].push(toolCall);
+
+		// Update the UI immediately to show the new tool call
+		updateChatUI();
+	}
+
+	/**
 	 * Update the chat UI
 	 */
 	function updateChatUI() {
@@ -552,6 +600,10 @@
 		if (!chatMessages) {
 			return;
 		}
+
+		// Check if user was scrolled near the bottom before updating
+		// (within 100px is considered "at bottom")
+		const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 100;
 
 		// Clear existing messages
 		chatMessages.innerHTML = '';
@@ -577,8 +629,11 @@
 		// Note: We no longer render a separate loading message since streaming
 		// is handled within the assistant message itself
 
-		// Scroll to bottom
-		chatMessages.scrollTop = chatMessages.scrollHeight;
+		// Only auto-scroll if user was already near the bottom
+		// This allows users to scroll up and read previous messages while streaming
+		if (wasNearBottom) {
+			chatMessages.scrollTop = chatMessages.scrollHeight;
+		}
 	}
 
 	/**
@@ -615,6 +670,7 @@
 			const model = modelSelectionState.availableModels.find(m => m.id === modelId);
 			const responseText = message.responses[modelId];
 			const errorText = message.errors?.[modelId];
+			const toolCalls = message.toolCalls?.[modelId];
 
 			const responseCard = document.createElement('div');
 			responseCard.className = `model-response ${errorText ? 'error' : ''}`;
@@ -637,6 +693,49 @@
 			// Response content
 			const content = document.createElement('div');
 			content.className = 'model-response-content';
+
+			// Show tool calls if available
+			if (toolCalls && toolCalls.length > 0) {
+				const toolCallsSection = document.createElement('div');
+				toolCallsSection.className = 'tool-calls-section';
+
+				const toolCallsHeader = document.createElement('div');
+				toolCallsHeader.className = 'tool-calls-header';
+				toolCallsHeader.textContent = `🔧 ${toolCalls.length} Tool${toolCalls.length === 1 ? '' : 's'} Called`;
+
+				toolCallsSection.appendChild(toolCallsHeader);
+
+				const toolCallsList = document.createElement('div');
+				toolCallsList.className = 'tool-calls-list';
+
+				toolCalls.forEach((toolCall, index) => {
+					const toolCallItem = document.createElement('div');
+					toolCallItem.className = 'tool-call-item';
+
+					const toolCallMessage = document.createElement('div');
+					toolCallMessage.className = 'tool-call-message';
+					toolCallMessage.textContent = toolCall.displayMessage;
+
+					const toolCallParams = document.createElement('details');
+					toolCallParams.className = 'tool-call-params';
+
+					const paramsSummary = document.createElement('summary');
+					paramsSummary.textContent = 'Parameters';
+					toolCallParams.appendChild(paramsSummary);
+
+					const paramsContent = document.createElement('pre');
+					paramsContent.className = 'tool-call-params-content';
+					paramsContent.textContent = JSON.stringify(toolCall.parameters, null, 2);
+					toolCallParams.appendChild(paramsContent);
+
+					toolCallItem.appendChild(toolCallMessage);
+					toolCallItem.appendChild(toolCallParams);
+					toolCallsList.appendChild(toolCallItem);
+				});
+
+				toolCallsSection.appendChild(toolCallsList);
+				content.appendChild(toolCallsSection);
+			}
 
 			if (errorText) {
 				// Show error message
@@ -734,13 +833,20 @@
 	}
 
 	/**
-	 * Update send button state
+	 * Update send and stop button states
 	 */
 	function updateSendButton() {
 		const sendButton = document.getElementById('send-button');
+		const stopButton = document.getElementById('stop-button');
+
 		if (sendButton) {
-			sendButton.disabled = chatState.isLoading || modelSelectionState.selectedModels.length === 0;
-			sendButton.textContent = chatState.isLoading ? 'Sending...' : 'Send';
+			// Send button is always enabled when models are selected
+			sendButton.disabled = modelSelectionState.selectedModels.length === 0;
+		}
+
+		if (stopButton) {
+			// Stop button only visible when actively loading
+			stopButton.style.display = chatState.isLoading ? 'flex' : 'none';
 		}
 	}
 
@@ -963,6 +1069,11 @@
 	async function cancelToolCalls() {
 		try {
 			await sendMessage('cancel-tools');
+
+			// Immediately reset the loading state since we've cancelled the request
+			chatState.isLoading = false;
+			updateChatUI();
+
 			showNotification('❌ All tool calls cancelled');
 		} catch (error) {
 			console.error('Failed to cancel tool calls:', error);
@@ -995,6 +1106,14 @@
 			const modelName = model?.name || modelId;
 
 			await sendMessage('cancel-model-tools', { modelId });
+
+			// If this was the only selected model, reset loading state
+			// Otherwise, keep loading state active since other models might still be processing
+			if (modelSelectionState.selectedModels.length === 1) {
+				chatState.isLoading = false;
+				updateChatUI();
+			}
+
 			showNotification(`❌ Tool calls cancelled for ${modelName}`);
 		} catch (error) {
 			console.error(`Failed to cancel tool calls for ${modelId}:`, error);
@@ -1035,6 +1154,7 @@
 		// Set up chat interface event listeners
 		const chatInput = document.getElementById('chat-input');
 		const sendButton = document.getElementById('send-button');
+		const stopButton = document.getElementById('stop-button');
 
 		if (sendButton) {
 			sendButton.onclick = () => {
@@ -1048,13 +1168,20 @@
 			};
 		}
 
+		if (stopButton) {
+			stopButton.onclick = () => {
+				cancelToolCalls();
+			};
+		}
+
 		if (chatInput) {
 			// Send message on Enter (but allow Shift+Enter for new lines)
 			chatInput.addEventListener('keydown', (event) => {
 				if (event.key === 'Enter' && !event.shiftKey) {
 					event.preventDefault();
 					const message = chatInput.value.trim();
-					if (message) {
+					const sendButton = document.getElementById('send-button');
+					if (message && sendButton && !sendButton.disabled) {
 						sendChatMessage(message);
 						chatInput.value = '';
 					}
@@ -1063,17 +1190,6 @@
 
 			// Update send button state when input changes
 			chatInput.addEventListener('input', updateSendButton);
-
-			// Handle Enter key to send message (Shift+Enter for new line)
-			chatInput.addEventListener('keydown', (event) => {
-				if (event.key === 'Enter' && !event.shiftKey) {
-					event.preventDefault();
-					const sendButton = document.getElementById('send-button');
-					if (sendButton && !sendButton.disabled) {
-						sendChatMessage();
-					}
-				}
-			});
 		}
 
 

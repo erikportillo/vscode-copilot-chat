@@ -108,6 +108,13 @@ export class ComparisonToolCoordinator extends Disposable {
 	}
 
 	/**
+	 * Get the PauseController for a specific model (if registered)
+	 */
+	public getPauseController(modelId: string): PauseController | undefined {
+		return this.modelPauseControllers.get(modelId);
+	}
+
+	/**
 	 * Update tool calls detected for a specific model
 	 */
 	public updateModelToolCalls(modelId: string, toolCalls: IToolCall[]): void {
@@ -257,19 +264,29 @@ export class ComparisonToolCoordinator extends Disposable {
 		// Clear tool calls for this model
 		this.modelToolCalls.set(modelId, []);
 
-		// Resume the model to continue without tool execution
-		this.resumeModel(modelId);
+		// DO NOT resume - let the cancellation token handle stopping the execution
+		// The model's cancellation token will be cancelled by the orchestrator
+		// which will cause it to stop iterating
 
-		console.log(`[ComparisonToolCoordinator] Cancelled tool execution for ${modelId}`);
+		// Emit tool state change to update the UI
+		this.emitToolStateChange();
+
+		console.log(`[ComparisonToolCoordinator] Cancelled tool execution for ${modelId} (without resuming)`);
 	}
 
 	/**
 	 * Cancel tool execution for all models
 	 */
 	public cancelAllToolExecution(): void {
-		// Clear all tool calls and resume to avoid hanging
+		// Clear all tool calls
 		this.modelToolCalls.clear();
-		this.resumeAllModels();
+
+		// DO NOT resume - let the cancellation tokens handle stopping the execution
+		// Each model's cancellation token will be cancelled by the orchestrator
+		// which will cause them to stop iterating
+
+		// Emit tool state change to update the UI
+		this.emitToolStateChange();
 	}
 
 	/**

@@ -5,6 +5,7 @@
 
 import type { ChatPromptReference, ChatRequest, ExtendedChatResponsePart } from 'vscode';
 import { getChatParticipantIdFromName } from '../../../platform/chat/common/chatAgents';
+import { IRequestLogger } from '../../../platform/requestLogger/node/requestLogger';
 import { ChatResponseStreamImpl } from '../../../util/common/chatResponseStreamImpl';
 import { CancellationToken } from '../../../util/vs/base/common/cancellation';
 import { Event } from '../../../util/vs/base/common/event';
@@ -17,6 +18,7 @@ import { PauseController } from '../../intents/node/pauseController';
 import { ChatParticipantRequestHandler, IChatAgentArgs } from '../../prompt/node/chatParticipantRequestHandler';
 import { getContributedToolName } from '../../tools/common/toolNames';
 import { IToolsService } from '../../tools/common/toolsService';
+import { IFormattedToolCall, ToolCallFormatter } from './toolCallFormatter';
 
 /**
  * Simple ChatRequest implementation for model comparison
@@ -53,6 +55,7 @@ export class SingleModelChatHandler implements IDisposable {
 
 	private _isDisposed = false;
 	private _endpointCache = new Map<string, any>();
+	private _toolCallTracking = new Map<ChatRequest, IFormattedToolCall[]>();
 
 	constructor(
 		private readonly instantiationService: IInstantiationService
@@ -77,8 +80,9 @@ export class SingleModelChatHandler implements IDisposable {
 		onProgress?: (chunk: string) => void,
 		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string },
 		onDelta?: (modelId: string, text: string, delta: any) => void,
-		onCompletion?: (modelId: string) => void
-	): Promise<{ response: string; error?: string }> {
+		onCompletion?: (modelId: string) => void,
+		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void
+	): Promise<{ response: string; error?: string; toolCalls?: IFormattedToolCall[] }> {
 
 		if (this._isDisposed) {
 			throw new Error('SingleModelChatHandler has been disposed');
@@ -87,6 +91,38 @@ export class SingleModelChatHandler implements IDisposable {
 		try {
 			// Create a proper ChatRequest for the model comparison
 			const chatRequest = new ModelComparisonChatRequest(message);
+
+			// Initialize tool call tracking for this request
+			this._toolCallTracking.set(chatRequest, []);
+
+			// Subscribe to tool call events from the RequestLogger
+			const requestLogger = this.instantiationService.invokeFunction(accessor => accessor.get(IRequestLogger));
+			console.log(`[SingleModelChatHandler] ${modelId} - Subscribing to tool calls for request:`, chatRequest.id);
+
+			const toolCallDisposable = requestLogger.onDidLogToolCall(toolCall => {
+				console.log(`[SingleModelChatHandler] ${modelId} - Tool call event received:`, {
+					toolName: toolCall.name,
+					toolRequestId: toolCall.chatRequest?.id,
+					ourRequestId: chatRequest.id,
+					match: toolCall.chatRequest?.id === chatRequest.id
+				});
+
+				// Only track tool calls for this specific chat request
+				// Compare by ID since the chatRequest objects may be different instances
+				if (toolCall.chatRequest?.id === chatRequest.id) {
+					const formattedCall = ToolCallFormatter.formatToolCall(toolCall);
+					const currentCalls = this._toolCallTracking.get(chatRequest) || [];
+					currentCalls.push(formattedCall);
+					this._toolCallTracking.set(chatRequest, currentCalls);
+
+					console.log(`[SingleModelChatHandler] Tracked tool call for ${modelId}:`, formattedCall.displayMessage);
+
+					// Notify listener of new tool call in real-time
+					if (onToolCall) {
+						onToolCall(modelId, formattedCall);
+					}
+				}
+			});
 
 			// If we have model metadata, create a proper LanguageModelChat object
 			if (modelMetadata) {
@@ -148,65 +184,44 @@ export class SingleModelChatHandler implements IDisposable {
 			console.log(`[SingleModelChatHandler] Total tools in chatRequest.tools map for ${modelId}:`, chatRequest.tools.size);
 			console.log(`[SingleModelChatHandler] Tools map contents for ${modelId}:`, Array.from(chatRequest.tools.entries()));
 
-			// Create a response stream that captures the output
+			// Create a response stream that captures the output and tool calls
+			// Note: ChatToolInvocationPart (with detailed invocationMessage) is only created
+			// when there's a valid toolInvocationToken from a real chat request.
+			// Since we create synthetic requests, we only get ChatPrepareToolInvocationPart.
 			let responseContent = '';
 
-			const responseStream = new ChatResponseStreamImpl(
+			const baseResponseStream = new ChatResponseStreamImpl(
 				(part: ExtendedChatResponsePart) => {
-					// Enhanced logging to understand what we're receiving
-					const partDetails = {
-						constructor: part.constructor.name,
-						keys: Object.keys(part),
-						toolName: (part as any).toolName,
-						kind: (part as any).kind,
-						type: (part as any).type,
-						name: (part as any).name,
-						id: (part as any).id,
-						callId: (part as any).callId,
-						hasValue: 'value' in part,
-						hasText: 'text' in part,
-						hasContent: 'content' in part
-					};
-					// Only log significant parts like tool calls, not every streaming chunk
-					if ((part as any).toolName || partDetails.keys.length > 3) {
-						console.log(`📡 [${modelId}] Response part:`, partDetails.keys.join(', '));
-					}
-
-					// Check for tool call parts - based on the log, look for toolName property
+					// Detect tool invocations - we only get ChatPrepareToolInvocationPart
+					// which contains just the tool name, not the full parameters
 					if ((part as any).toolName) {
-						console.log(`🔧 [${modelId}] Tool call: ${(part as any).toolName}`);
-						if (onDelta) {
-							// Create a structured delta with tool calls
-							const toolCallDelta = {
-								copilotToolCalls: [{
-									id: (part as any).id || (part as any).callId || `tool_call_${Date.now()}`,
-									name: (part as any).toolName,
-									arguments: (part as any).arguments || JSON.stringify((part as any).input || {})
-								}]
-							};
-							onDelta(modelId, '', toolCallDelta);
-						} else {
-							console.log(`[SingleModelChatHandler] *** NO onDelta CALLBACK *** for ${modelId}`);
-						}
-						// Still continue processing - don't return early to avoid breaking streaming
-					}
+						const toolName = (part as any).toolName;
+						const hasCallId = !!(part as any).toolCallId;
 
-					// Check for other tool call indicators
-					if ((part as any).kind === 'toolCall' || (part as any).type === 'toolCall') {
-						console.log(`[SingleModelChatHandler] Found tool call part (kind/type) for ${modelId}:`, part);
+						if (hasCallId) {
+							// This is ChatToolInvocationPart (unlikely without real toolInvocationToken)
+							const invocationMsg = (part as any).invocationMessage;
+							const displayText = typeof invocationMsg === 'string'
+								? invocationMsg
+								: invocationMsg?.value || toolName;
+							console.log(`🔧 [${modelId}] Tool invocation: ${displayText}`);
+						} else {
+							// This is ChatPrepareToolInvocationPart (what we actually get)
+							console.log(`🔄 [${modelId}] Tool call: ${toolName}`);
+						}
+
+						// Report the tool call to the comparison UI
 						if (onDelta) {
-							// Create a structured delta with tool calls
 							const toolCallDelta = {
 								copilotToolCalls: [{
-									id: (part as any).id || (part as any).callId || `tool_call_${Date.now()}`,
-									name: (part as any).name || (part as any).toolName,
-									arguments: (part as any).arguments || JSON.stringify((part as any).input || {})
+									id: (part as any).toolCallId || `prepare_${toolName}_${Date.now()}`,
+									name: toolName,
+									// Note: We don't have access to the actual parameters here
+									arguments: JSON.stringify({ toolName })
 								}]
 							};
-							console.log(`[SingleModelChatHandler] Created tool call delta (kind/type) for ${modelId}:`, toolCallDelta);
 							onDelta(modelId, '', toolCallDelta);
 						}
-						// Still continue processing - don't return early to avoid breaking streaming
 					}
 
 					// Handle different types of response parts for text content
@@ -255,6 +270,9 @@ export class SingleModelChatHandler implements IDisposable {
 				}
 			);
 
+			// Wrap the response stream to use it with ChatParticipantRequestHandler
+			const responseStream = baseResponseStream;
+
 			// Configure chat agent arguments for the default copilot agent
 			const chatAgentArgs: IChatAgentArgs = {
 				agentName: 'copilot',
@@ -297,15 +315,26 @@ export class SingleModelChatHandler implements IDisposable {
 			await requestHandler.getResult();
 			console.log(`✅ [${modelId}] Completed (${responseContent.length} chars)`);
 
+			// Dispose the tool call listener
+			toolCallDisposable.dispose();
+
+			// Get the tracked tool calls for this request
+			const toolCalls = this._toolCallTracking.get(chatRequest) || [];
+			console.log(`[SingleModelChatHandler] ${modelId} used ${toolCalls.length} tools:`, toolCalls.map(tc => tc.displayMessage));
+
+			// Clean up tracking map
+			this._toolCallTracking.delete(chatRequest);
+
 			// Call completion callback if provided
 			if (onCompletion) {
 				onCompletion(modelId);
 			}
 
-			// Return the accumulated response
+			// Return the accumulated response with tool calls
 			return {
 				response: responseContent,
-				error: undefined
+				error: undefined,
+				toolCalls
 			};
 
 		} catch (error) {
@@ -313,9 +342,17 @@ export class SingleModelChatHandler implements IDisposable {
 			const errorMsg = error instanceof Error ? error.message : String(error);
 			return {
 				response: '',
-				error: errorMsg
+				error: errorMsg,
+				toolCalls: []
 			};
 		}
+	}
+
+	/**
+	 * Get tool calls tracked for a specific chat request
+	 */
+	public getToolCallsForRequest(chatRequest: ChatRequest): IFormattedToolCall[] {
+		return this._toolCallTracking.get(chatRequest) || [];
 	}
 
 	/**
@@ -324,5 +361,6 @@ export class SingleModelChatHandler implements IDisposable {
 	dispose(): void {
 		this._isDisposed = true;
 		this._endpointCache.clear();
+		this._toolCallTracking.clear();
 	}
 }

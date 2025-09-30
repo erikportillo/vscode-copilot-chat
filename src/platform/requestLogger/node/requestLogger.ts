@@ -170,6 +170,18 @@ export interface IRequestLogger {
 
 	enableWorkspaceEditTracing(): void;
 	disableWorkspaceEditTracing(): void;
+
+	/**
+	 * Event that fires when a tool call is logged
+	 */
+	onDidLogToolCall: Event<ILoggedToolCall>;
+
+	/**
+	 * Query tool calls for a specific chat request
+	 * @param chatRequest The chat request to filter by
+	 * @returns Array of tool calls associated with the request
+	 */
+	getToolCallsForRequest(chatRequest: ChatRequest): ILoggedToolCall[];
 }
 
 export const enum LoggedRequestKind {
@@ -286,6 +298,21 @@ export abstract class AbstractRequestLogger extends Disposable implements IReque
 	/** Current request being made to the LM. */
 	protected get currentRequest() {
 		return requestLogStorage.getStore();
+	}
+
+	// Abstract event for tool call logging - concrete implementations must provide
+	public abstract onDidLogToolCall: Event<ILoggedToolCall>;
+
+	/**
+	 * Query tool calls for a specific chat request
+	 * Default implementation filters all requests by chat request
+	 */
+	public getToolCallsForRequest(chatRequest: ChatRequest): ILoggedToolCall[] {
+		return this.getRequests()
+			.filter((entry): entry is ILoggedToolCall =>
+				entry.kind === LoggedInfoKind.ToolCall &&
+				entry.chatRequest === chatRequest
+			);
 	}
 }
 

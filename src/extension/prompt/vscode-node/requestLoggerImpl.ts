@@ -315,6 +315,9 @@ export class RequestLogger extends AbstractRequestLogger {
 	private _onDidChangeRequests = new Emitter<void>();
 	public readonly onDidChangeRequests = this._onDidChangeRequests.event;
 
+	private _onDidLogToolCall = new Emitter<ILoggedToolCall>();
+	public readonly onDidLogToolCall = this._onDidLogToolCall.event;
+
 	public override logModelListCall(id: string, requestMetadata: RequestMetadata, models: IModelAPIResponse[]): void {
 		this.addEntry({
 			type: LoggedRequestKind.MarkdownContentRequest,
@@ -329,7 +332,7 @@ export class RequestLogger extends AbstractRequestLogger {
 		const edits = this._workspaceEditRecorder?.getEditsAndReset();
 		// Extract toolMetadata from response if it exists
 		const toolMetadata = 'toolMetadata' in response ? (response as ExtendedLanguageModelToolResult).toolMetadata : undefined;
-		this._addEntry(new LoggedToolCall(
+		const toolCall = new LoggedToolCall(
 			id,
 			name,
 			args,
@@ -339,7 +342,18 @@ export class RequestLogger extends AbstractRequestLogger {
 			thinking,
 			edits,
 			toolMetadata
-		));
+		);
+		this._addEntry(toolCall);
+
+		// Fire event for tool call tracking
+		console.log(`[RequestLogger] Firing tool call event:`, {
+			toolName: name,
+			toolId: id,
+			hasCurrentRequest: !!this.currentRequest,
+			currentRequestId: this.currentRequest?.id,
+			listenerCount: (this._onDidLogToolCall as any)._listeners?.length ?? 'unknown'
+		});
+		this._onDidLogToolCall.fire(toolCall);
 	}
 
 	/** Start tracking edits made to the workspace for every tool call. */

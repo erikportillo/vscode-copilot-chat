@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CancellationToken } from '../../../util/vs/base/common/cancellation';
+import { CancellationToken, CancellationTokenSource } from '../../../util/vs/base/common/cancellation';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { ChatRequestTurn, ChatResponseTurn } from '../../../vscodeTypes';
@@ -11,6 +11,7 @@ import { PauseController } from '../../intents/node/pauseController';
 import { ComparisonToolCoordinator, IComparisonToolState } from './comparisonToolCoordinator';
 import { SingleModelChatHandler } from './singleModelChatHandler';
 import { IToolCallDetection, ToolCallDetectionService } from './toolCallDetectionService';
+import { IFormattedToolCall } from './toolCallFormatter';
 
 /**
  * Response from a single model chat request
@@ -21,6 +22,7 @@ export interface ModelChatResponse {
 	error?: string;
 	isComplete: boolean;
 	timestamp: number;
+	toolCalls?: IFormattedToolCall[];
 }
 
 /**
@@ -53,7 +55,7 @@ export class ComparisonChatOrchestrator extends Disposable {
 	private readonly chatHandlers = new Map<string, SingleModelChatHandler>();
 	private readonly toolCoordinator: ComparisonToolCoordinator;
 	private readonly toolDetectionService: ToolCallDetectionService;
-	private readonly modelPauseControllers = new Map<string, PauseController>();
+	private readonly modelCancellationTokenSources = new Map<string, CancellationTokenSource>();
 
 	constructor(
 		private readonly instantiationService: IInstantiationService
@@ -123,7 +125,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 		history: ReadonlyArray<ChatRequestTurn | ChatResponseTurn> = [],
 		cancellationToken: CancellationToken,
 		onProgress?: StreamingProgressCallback,
-		modelMetadataMap?: Map<string, { id: string; name: string; family?: string; version?: string; vendor?: string }>
+		modelMetadataMap?: Map<string, { id: string; name: string; family?: string; version?: string; vendor?: string }>,
+		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void
 	): Promise<ModelChatResponse[]> {
 		if (modelIds.length === 0) {
 			return [];
@@ -140,17 +143,37 @@ export class ComparisonChatOrchestrator extends Disposable {
 				this.chatHandlers.set(modelId, handler);
 			}
 
-			// Create or get pause controller for this model
-			let pauseController = this.modelPauseControllers.get(modelId);
-			if (!pauseController) {
-				// Use model-specific pause event instead of shared event
-				pauseController = this._register(new PauseController(
-					this.toolCoordinator.getModelPauseEvent(modelId),
-					cancellationToken
-				));
-				this.modelPauseControllers.set(modelId, pauseController);
-				this.toolCoordinator.registerModel(modelId, pauseController);
+			// Clean up any existing cancellation token source for this model (from previous cancelled request)
+			const existingTokenSource = this.modelCancellationTokenSources.get(modelId);
+			if (existingTokenSource) {
+				existingTokenSource.dispose();
 			}
+
+			// Create a per-model cancellation token source
+			const modelCancellationTokenSource = new CancellationTokenSource();
+			this.modelCancellationTokenSources.set(modelId, modelCancellationTokenSource);
+
+			// Link the parent cancellation token to this model's token
+			if (cancellationToken.isCancellationRequested) {
+				modelCancellationTokenSource.cancel();
+			} else {
+				cancellationToken.onCancellationRequested(() => {
+					modelCancellationTokenSource.cancel();
+				});
+			}
+
+			// Clean up any existing pause controller for this model (from previous cancelled request)
+			const existingPauseController = this.toolCoordinator.getPauseController(modelId);
+			if (existingPauseController) {
+				this.toolCoordinator.unregisterModel(modelId);
+			}
+
+			// Create a new pause controller for this model using its own cancellation token
+			const pauseController = this._register(new PauseController(
+				this.toolCoordinator.getModelPauseEvent(modelId),
+				modelCancellationTokenSource.token
+			));
+			this.toolCoordinator.registerModel(modelId, pauseController);
 
 			// Create enhanced progress callback that also detects tool calls
 			const modelProgressCallback = onProgress
@@ -189,7 +212,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 				modelProgressCallback,
 				modelMetadata,
 				modelDeltaCallback,
-				modelCompletionCallback
+				modelCompletionCallback,
+				onToolCall
 			);
 
 			chatPromises.push(chatPromise);
@@ -216,7 +240,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 					response: '',
 					error,
 					isComplete: true,
-					timestamp
+					timestamp,
+					toolCalls: []
 				};
 			}
 		});
@@ -234,13 +259,14 @@ export class ComparisonChatOrchestrator extends Disposable {
 		onProgress?: (chunk: string) => void,
 		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string },
 		onDelta?: (modelId: string, text: string, delta: any) => void,
-		onCompletion?: (modelId: string) => void
+		onCompletion?: (modelId: string) => void,
+		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void
 	): Promise<ModelChatResponse> {
 
 		const timestamp = Date.now();
 
 		try {
-			const result = await handler.sendChatMessage(
+			const result: { response: string; error?: string; toolCalls?: IFormattedToolCall[] } = await handler.sendChatMessage(
 				modelId,
 				message,
 				history,
@@ -248,7 +274,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 				onProgress,
 				modelMetadata,
 				onDelta,
-				onCompletion
+				onCompletion,
+				onToolCall
 			);
 
 			return {
@@ -256,7 +283,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 				response: result.response,
 				error: result.error,
 				isComplete: true,
-				timestamp
+				timestamp,
+				toolCalls: result.toolCalls || []
 			};
 
 		} catch (error) {
@@ -266,7 +294,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 				response: '',
 				error: errorMsg,
 				isComplete: true,
-				timestamp
+				timestamp,
+				toolCalls: []
 			};
 		}
 	}
@@ -275,8 +304,36 @@ export class ComparisonChatOrchestrator extends Disposable {
 	 * Cancel all ongoing requests
 	 */
 	cancelAllRequests(): void {
-		// Individual requests are cancelled via the cancellation token passed to them
-		// This method could be extended to track and cancel individual requests if needed
+		// Cancel all per-model cancellation token sources
+		for (const [modelId, tokenSource] of this.modelCancellationTokenSources) {
+			console.log(`[ComparisonChatOrchestrator] Cancelling request for model: ${modelId}`);
+			tokenSource.cancel();
+			tokenSource.dispose();
+		}
+		this.modelCancellationTokenSources.clear();
+
+		// Clean up pause controllers so new requests get fresh ones
+		// The tool coordinator owns these, so just unregister all models
+		for (const modelId of this.toolCoordinator.getRegisteredModelIds()) {
+			this.toolCoordinator.unregisterModel(modelId);
+		}
+	}
+
+	/**
+	 * Cancel a specific model's request
+	 */
+	cancelModelRequest(modelId: string): void {
+		const tokenSource = this.modelCancellationTokenSources.get(modelId);
+		if (tokenSource) {
+			console.log(`[ComparisonChatOrchestrator] Cancelling request for model: ${modelId}`);
+			tokenSource.cancel();
+			tokenSource.dispose();
+			this.modelCancellationTokenSources.delete(modelId);
+		}
+
+		// Clean up the pause controller so new requests get a fresh one
+		// The tool coordinator owns it, so just unregister the model
+		this.toolCoordinator.unregisterModel(modelId);
 	}
 
 	/**
@@ -290,17 +347,24 @@ export class ComparisonChatOrchestrator extends Disposable {
 	 * Clear all handlers (useful for cleanup or reset)
 	 */
 	clearHandlers(): void {
+		// Cancel any ongoing requests first
+		this.cancelAllRequests();
+
+		// Dispose and clear cancellation token sources
+		for (const tokenSource of this.modelCancellationTokenSources.values()) {
+			tokenSource.dispose();
+		}
+		this.modelCancellationTokenSources.clear();
+
 		for (const handler of this.chatHandlers.values()) {
 			handler.dispose();
 		}
 		this.chatHandlers.clear();
 
-		// Also clear pause controllers and unregister from tool coordinator
-		for (const [modelId, pauseController] of this.modelPauseControllers) {
+		// Clear pause controllers by unregistering all models from the tool coordinator
+		for (const modelId of this.toolCoordinator.getRegisteredModelIds()) {
 			this.toolCoordinator.unregisterModel(modelId);
-			pauseController.dispose();
 		}
-		this.modelPauseControllers.clear();
 
 		// Clear tool detection buffers
 		this.toolDetectionService.clearAllBuffers();

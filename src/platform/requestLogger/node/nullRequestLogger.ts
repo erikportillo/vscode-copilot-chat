@@ -5,7 +5,7 @@
 
 import type { RequestMetadata } from '@vscode/copilot-api';
 import type { LanguageModelToolResult } from 'vscode';
-import { AbstractRequestLogger, ILoggedRequestInfo, LoggedRequest } from '../../../platform/requestLogger/node/requestLogger';
+import { AbstractRequestLogger, ILoggedRequestInfo, ILoggedToolCall, LoggedRequest } from '../../../platform/requestLogger/node/requestLogger';
 import { Event } from '../../../util/vs/base/common/event';
 import { IModelAPIResponse } from '../../endpoint/common/endpointProvider';
 
@@ -23,4 +23,5 @@ export class NullRequestLogger extends AbstractRequestLogger {
 	public override logToolCall(name: string | undefined, args: unknown, response: LanguageModelToolResult): void {
 	}
 	override onDidChangeRequests: Event<void> = Event.None;
+	override onDidLogToolCall: Event<ILoggedToolCall> = Event.None;
 }

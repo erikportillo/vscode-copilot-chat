@@ -243,6 +243,7 @@ export class ResponseAggregator extends Disposable {
 	static toWebviewFormat(aggregated: AggregatedResponse): any {
 		const responses: { [modelId: string]: string } = {};
 		const errors: { [modelId: string]: string } = {};
+		const toolCalls: { [modelId: string]: any[] } = {};
 		const selectedModels: string[] = [];
 
 		for (const [modelId, response] of aggregated.responses) {
@@ -253,6 +254,10 @@ export class ResponseAggregator extends Disposable {
 			} else {
 				responses[modelId] = response.response;
 			}
+			// Include tool calls in the webview format
+			if (response.toolCalls && response.toolCalls.length > 0) {
+				toolCalls[modelId] = response.toolCalls;
+			}
 		}
 
 		return {
@@ -262,7 +267,8 @@ export class ResponseAggregator extends Disposable {
 			selectedModels,
 			timestamp: aggregated.endTime || aggregated.startTime,
 			stats: aggregated.stats,
-			isComplete: aggregated.isComplete
+			isComplete: aggregated.isComplete,
+			toolCalls
 		};
 	}
 
