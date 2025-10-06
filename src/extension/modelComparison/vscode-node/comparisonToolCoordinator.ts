@@ -155,15 +155,17 @@ export class ComparisonToolCoordinator extends Disposable {
 			return;
 		}
 
-		if (controller.isPaused) {
-			// Clear tool calls immediately since user has approved them
-			this.modelToolCalls.set(modelId, []);
-			// Fire resume event for this specific model only
+		// Clear tool calls immediately since user has approved/cancelled them
+		const hadToolCalls = (this.modelToolCalls.get(modelId)?.length ?? 0) > 0;
+		this.modelToolCalls.set(modelId, []);
+
+		// Fire resume event regardless of current pause state
+		// This is important for cancellation scenarios where the pause promise
+		// may already be completed but we still need to signal the resume
+		if (controller.isPaused || hadToolCalls) {
 			emitter.fire(false);
 			// Update UI immediately to reflect cleared tool calls
 			this.emitToolStateChange();
-		} else {
-			console.log(`[ComparisonToolCoordinator] Model ${modelId} already resumed`);
 		}
 
 		// Update the all-paused state based on whether any model is paused
@@ -196,28 +198,17 @@ export class ComparisonToolCoordinator extends Disposable {
 	 * Pause all models before tool execution
 	 */
 	public pauseAllModels(): void {
-		console.log('[ComparisonToolCoordinator] pauseAllModels() called', {
-			controllerCount: this.modelPauseControllers.size,
-			wasAlreadyPaused: this._isAllPaused
-		});
-
 		// Fire pause event for each individual model
-		let pausedCount = 0;
 		for (const [modelId, controller] of this.modelPauseControllers.entries()) {
 			if (!controller.isPaused) {
-				console.log(`[ComparisonToolCoordinator] Pausing model ${modelId}`);
 				const emitter = this.modelPauseEmitters.get(modelId);
 				if (emitter) {
 					emitter.fire(true);
 				}
-				pausedCount++;
-			} else {
-				console.log(`[ComparisonToolCoordinator] Model ${modelId} already paused`);
 			}
 		}
 
 		this._isAllPaused = true;
-		console.log(`[ComparisonToolCoordinator] Paused ${pausedCount} models, coordinator now paused:`, this._isAllPaused);
 		this.updatePauseState();
 
 		// Also fire the coordinator's own event for backward compatibility
@@ -228,62 +219,65 @@ export class ComparisonToolCoordinator extends Disposable {
 	 * Resume all models to continue with tool execution
 	 */
 	public resumeAllModels(): void {
-		console.log('[ComparisonToolCoordinator] resumeAllModels() called', {
-			controllerCount: this.modelPauseControllers.size,
-			wasAlreadyResumed: !this._isAllPaused
-		});
-
 		// Fire resume event for each individual model
-		let resumedCount = 0;
 		for (const [modelId, controller] of this.modelPauseControllers.entries()) {
 			if (controller.isPaused) {
-				console.log(`[ComparisonToolCoordinator] Resuming model ${modelId}`);
 				const emitter = this.modelPauseEmitters.get(modelId);
 				if (emitter) {
 					emitter.fire(false);
 				}
-				resumedCount++;
-			} else {
-				console.log(`[ComparisonToolCoordinator] Model ${modelId} already resumed`);
 			}
 		}
 
 		this._isAllPaused = false;
-		console.log(`[ComparisonToolCoordinator] Resumed ${resumedCount} models, coordinator now paused:`, this._isAllPaused);
 		this.updatePauseState();
 	}
 
 
 
 	/**
-	 * Cancel tool execution for a specific model
+	 * Clear tool calls for a specific model
 	 */
-	public cancelModelToolExecution(modelId: string): void {
-		console.log(`[ComparisonToolCoordinator] cancelModelToolExecution(${modelId}) called`);
-
-		// Clear tool calls for this model
+	public clearModelToolCalls(modelId: string): void {
 		this.modelToolCalls.set(modelId, []);
-
-		// DO NOT resume - let the cancellation token handle stopping the execution
-		// The model's cancellation token will be cancelled by the orchestrator
-		// which will cause it to stop iterating
-
-		// Emit tool state change to update the UI
 		this.emitToolStateChange();
-
-		console.log(`[ComparisonToolCoordinator] Cancelled tool execution for ${modelId} (without resuming)`);
 	}
 
 	/**
-	 * Cancel tool execution for all models
+	 * Clear all tool calls
+	 */
+	public clearAllToolCalls(): void {
+		this.modelToolCalls.clear();
+		this.emitToolStateChange();
+	}
+
+	/**
+	 * Cancel tool execution for a specific model (legacy method for backward compatibility)
+	 * @deprecated Use clearModelToolCalls() and resumeModel() separately for better control
+	 */
+	public cancelModelToolExecution(modelId: string): void {
+		// Clear tool calls for this model
+		this.modelToolCalls.set(modelId, []);
+
+		// Resume the model so it can detect the cancellation token
+		// Without this, the model stays paused forever waiting for approval
+		this.resumeModel(modelId);
+
+		// Emit tool state change to update the UI
+		this.emitToolStateChange();
+	}
+
+	/**
+	 * Cancel tool execution for all models (legacy method for backward compatibility)
+	 * @deprecated Use clearAllToolCalls() and resumeAllModels() separately for better control
 	 */
 	public cancelAllToolExecution(): void {
+		// Resume all models so they can detect the cancellation token
+		// Without this, paused models stay paused forever waiting for approval
+		this.resumeAllModels();
+
 		// Clear all tool calls
 		this.modelToolCalls.clear();
-
-		// DO NOT resume - let the cancellation tokens handle stopping the execution
-		// Each model's cancellation token will be cancelled by the orchestrator
-		// which will cause them to stop iterating
 
 		// Emit tool state change to update the UI
 		this.emitToolStateChange();

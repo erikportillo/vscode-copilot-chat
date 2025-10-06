@@ -142,21 +142,6 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						</div>
 					</div>
 
-					<!-- Tool Call Preview Section -->
-					<div class="tool-call-preview" id="tool-call-preview" style="display: none;">
-						<div class="tool-call-header">
-							<h3>🔧 Tool Calls Detected</h3>
-							<p>The models want to execute tools. Review and approve:</p>
-						</div>
-						<div class="tool-call-content" id="tool-call-content">
-							<!-- Tool call details will be populated by JavaScript -->
-						</div>
-						<div class="tool-call-actions">
-							<button id="approve-tools" class="primary-button">✅ Approve All</button>
-							<button id="cancel-tools" class="danger-button">❌ Cancel</button>
-						</div>
-					</div>
-
 					<!-- Chat Messages Display -->
 					<div class="chat-messages" id="chat-messages">
 						<div class="chat-instructions">
@@ -169,6 +154,17 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						<div class="chat-input-container">
 							<textarea id="chat-input" placeholder="Type your message here..." rows="2"></textarea>
 							<div class="chat-actions">
+								<button id="approve-tools-global" class="icon-button approve-button" title="Approve all tool calls" style="display: none;">
+									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+										<path d="M6.5 12L2 7.5l1.5-1.5L6.5 9l6-6L14 4.5z"/>
+									</svg>
+								</button>
+								<button id="cancel-tools-global" class="icon-button cancel-button" title="Cancel all tool calls" style="display: none;">
+									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+										<path d="M8 1L1 8l7 7 7-7-7-7zm0 2.41L12.59 8 8 12.59 3.41 8 8 3.41z"/>
+										<path d="M10.59 5L8 7.59 5.41 5 4 6.41 6.59 9 4 11.59 5.41 13 8 10.41l2.59 2.59L12 11.59 9.41 9 12 6.41z"/>
+									</svg>
+								</button>
 								<button id="stop-button" class="icon-button stop-button" title="Stop all requests" style="display: none;">
 									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
 										<rect x="4" y="4" width="8" height="8" />
@@ -411,9 +407,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 			}
 
 			case 'cancel-tools': {
-				// Cancel all tool execution by cancelling the underlying requests
+				// Cancel all ongoing requests (orchestrator handles resume + cancel + cleanup)
 				this.comparisonChatOrchestrator.cancelAllRequests();
-				this.comparisonChatOrchestrator.getToolCoordinator().cancelAllToolExecution();
 				return {
 					success: true,
 					message: 'All tool calls cancelled'
@@ -445,9 +440,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						message: 'Model ID is required'
 					};
 				}
-				// Cancel the specific model's request
+				// Cancel the model request (orchestrator handles resume + cancel + cleanup)
 				this.comparisonChatOrchestrator.cancelModelRequest(modelId);
-				this.comparisonChatOrchestrator.getToolCoordinator().cancelModelToolExecution(modelId);
 				return {
 					success: true,
 					message: `Tool calls cancelled for model ${modelId}`

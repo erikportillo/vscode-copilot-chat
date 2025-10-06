@@ -304,7 +304,12 @@ export class ComparisonChatOrchestrator extends Disposable {
 	 * Cancel all ongoing requests
 	 */
 	cancelAllRequests(): void {
-		// Cancel all per-model cancellation token sources
+		// First, resume all models so they can detect cancellation
+		// (must happen while pause controllers are still valid)
+		this.toolCoordinator.resumeAllModels();
+		this.toolCoordinator.clearAllToolCalls();
+
+		// Then cancel and dispose the cancellation token sources
 		for (const [modelId, tokenSource] of this.modelCancellationTokenSources) {
 			console.log(`[ComparisonChatOrchestrator] Cancelling request for model: ${modelId}`);
 			tokenSource.cancel();
@@ -312,8 +317,7 @@ export class ComparisonChatOrchestrator extends Disposable {
 		}
 		this.modelCancellationTokenSources.clear();
 
-		// Clean up pause controllers so new requests get fresh ones
-		// The tool coordinator owns these, so just unregister all models
+		// Finally, clean up pause controllers (now that models are resumed and tokens cancelled)
 		for (const modelId of this.toolCoordinator.getRegisteredModelIds()) {
 			this.toolCoordinator.unregisterModel(modelId);
 		}
@@ -323,6 +327,12 @@ export class ComparisonChatOrchestrator extends Disposable {
 	 * Cancel a specific model's request
 	 */
 	cancelModelRequest(modelId: string): void {
+		// First, resume the model so it can detect cancellation
+		// (must happen while pause controller is still valid)
+		this.toolCoordinator.resumeModel(modelId);
+		this.toolCoordinator.clearModelToolCalls(modelId);
+
+		// Then cancel and dispose the cancellation token
 		const tokenSource = this.modelCancellationTokenSources.get(modelId);
 		if (tokenSource) {
 			console.log(`[ComparisonChatOrchestrator] Cancelling request for model: ${modelId}`);
@@ -331,8 +341,7 @@ export class ComparisonChatOrchestrator extends Disposable {
 			this.modelCancellationTokenSources.delete(modelId);
 		}
 
-		// Clean up the pause controller so new requests get a fresh one
-		// The tool coordinator owns it, so just unregister the model
+		// Finally, clean up the pause controller (now that model is resumed and token cancelled)
 		this.toolCoordinator.unregisterModel(modelId);
 	}
 

@@ -36,6 +36,7 @@ class ModelComparisonChatRequest implements ChatRequest {
 	public model: any = null;
 	public tools = new Map();
 	public id = generateUuid();
+	public sessionId = generateUuid();
 
 	constructor(
 		public prompt: string
@@ -340,6 +341,7 @@ export class SingleModelChatHandler implements IDisposable {
 		} catch (error) {
 			// Handle any errors that occurred during processing
 			const errorMsg = error instanceof Error ? error.message : String(error);
+			console.log(`❌ [${modelId}] Error occurred:`, errorMsg);
 			return {
 				response: '',
 				error: errorMsg,

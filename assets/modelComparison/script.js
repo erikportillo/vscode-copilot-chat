@@ -549,6 +549,9 @@
 
 		// Update the UI to show the streaming content
 		updateChatUI();
+
+		// Don't check for completion here - streaming chunks don't indicate completion
+		// We'll check when we receive the final response or tool state changes
 	}
 
 	/**
@@ -674,6 +677,7 @@
 
 			const responseCard = document.createElement('div');
 			responseCard.className = `model-response ${errorText ? 'error' : ''}`;
+			responseCard.setAttribute('data-model-id', modelId); // Add model ID as data attribute
 
 			// Response header with model info
 			const header = document.createElement('div');
@@ -693,6 +697,14 @@
 			// Response content
 			const content = document.createElement('div');
 			content.className = 'model-response-content';
+
+			// Check if this model has pending tool call previews
+			const modelPreview = toolCallState.toolCallPreviews.find(p => p.modelId === modelId);
+			if (modelPreview && toolCallState.isPreviewVisible) {
+				// Show tool call preview for this model using the shared helper
+				const previewSection = createToolPreviewElement(modelPreview, modelId);
+				content.appendChild(previewSection);
+			}
 
 			// Show tool calls if available
 			if (toolCalls && toolCalls.length > 0) {
@@ -797,6 +809,7 @@
 
 			const responseCard = document.createElement('div');
 			responseCard.className = 'model-response';
+			responseCard.setAttribute('data-model-id', modelId); // Add model ID as data attribute
 
 			// Response header
 			const header = document.createElement('div');
@@ -861,194 +874,163 @@
 		toolCallState.canApprove = toolState.canResume || false;
 		toolCallState.canCancel = toolState.canCancel || false;
 
-		renderToolCallPreview();
+		// Instead of re-rendering the entire chat, update existing tool previews in the DOM
+		updateExistingToolPreviews();
+
+		// Update global approve/cancel buttons if they exist
+		updateGlobalToolButtons();
 	}
 
 	/**
-	 * Render the tool call preview UI
+	 * Update existing tool preview sections in the DOM without re-rendering everything
 	 */
-	function renderToolCallPreview() {
-		const previewContainer = document.getElementById('tool-call-preview');
-		const previewContent = document.getElementById('tool-call-content');
-		const approveButton = document.getElementById('approve-tools');
-		const cancelButton = document.getElementById('cancel-tools');
-
-		if (!previewContainer || !previewContent) {
+	function updateExistingToolPreviews() {
+		const chatMessages = document.getElementById('chat-messages');
+		if (!chatMessages) {
 			return;
 		}
 
-		// Show or hide the preview based on state
-		previewContainer.style.display = toolCallState.isPreviewVisible ? 'block' : 'none';
+		// Find all model response cards
+		const responseCards = chatMessages.querySelectorAll('.model-response');
 
-		// Update button states
+		responseCards.forEach(responseCard => {
+			// Get the model ID from the data attribute
+			const modelId = responseCard.getAttribute('data-model-id');
+			if (!modelId) {
+				return;
+			}
+
+			const content = responseCard.querySelector('.model-response-content');
+			if (!content) {
+				return;
+			}
+
+			// Check if this model has a preview in the current state
+			const modelPreview = toolCallState.toolCallPreviews.find(p => p.modelId === modelId);
+			const existingPreview = content.querySelector('.model-tool-preview');
+
+			if (modelPreview && toolCallState.isPreviewVisible) {
+				// Model should have a preview
+				if (existingPreview) {
+					// Update existing preview
+					updateToolPreviewElement(existingPreview, modelPreview, modelId);
+				} else {
+					// Create new preview at the start of content
+					const newPreview = createToolPreviewElement(modelPreview, modelId);
+					content.insertBefore(newPreview, content.firstChild);
+				}
+			} else {
+				// Model should NOT have a preview - remove it if it exists
+				if (existingPreview) {
+					existingPreview.remove();
+				}
+			}
+		});
+	}
+
+	/**
+	 * Create a tool preview element
+	 */
+	function createToolPreviewElement(modelPreview, modelId) {
+		const previewSection = document.createElement('div');
+		previewSection.className = 'model-tool-preview';
+
+		// Generate a list of tool names
+		const toolNames = modelPreview.toolCalls.map(tc => tc.name).join(', ');
+		const toolCount = modelPreview.toolCalls.length;
+
+		const previewHeader = document.createElement('div');
+		previewHeader.className = 'model-tool-preview-header';
+		previewHeader.innerHTML = `
+			<div class="preview-info">
+				<span class="preview-label">🔧 Tool Calls Detected</span>
+				<span class="preview-tools">${escapeHtml(toolNames)}</span>
+			</div>
+			<span class="preview-count">${toolCount} tool${toolCount === 1 ? '' : 's'}</span>
+		`;
+
+		const previewActions = document.createElement('div');
+		previewActions.className = 'model-tool-preview-actions';
+
+		const approveBtn = document.createElement('button');
+		approveBtn.className = 'approve-model-btn';
+		// Individual model buttons should be enabled if this model has tool calls
+		// Don't use global canApprove flag - each model can be approved independently
+		approveBtn.disabled = false;
+		approveBtn.innerHTML = '<span class="btn-icon">✅</span><span class="btn-text">Approve</span>';
+		approveBtn.onclick = () => approveModelToolCalls(modelId);
+
+		const cancelBtn = document.createElement('button');
+		cancelBtn.className = 'cancel-model-btn';
+		// Individual model buttons should be enabled if this model has tool calls
+		// Don't use global canCancel flag - each model can be cancelled independently
+		cancelBtn.disabled = false;
+		cancelBtn.innerHTML = '<span class="btn-icon">❌</span><span class="btn-text">Cancel</span>';
+		cancelBtn.onclick = () => cancelModelToolCalls(modelId);
+
+		previewActions.appendChild(approveBtn);
+		previewActions.appendChild(cancelBtn);
+
+		previewSection.appendChild(previewHeader);
+		previewSection.appendChild(previewActions);
+
+		return previewSection;
+	}
+
+	/**
+	 * Update an existing tool preview element
+	 */
+	function updateToolPreviewElement(previewElement, modelPreview, modelId) {
+		// Update tool names
+		const toolNames = modelPreview.toolCalls.map(tc => tc.name).join(', ');
+		const toolCount = modelPreview.toolCalls.length;
+
+		const previewTools = previewElement.querySelector('.preview-tools');
+		const previewCount = previewElement.querySelector('.preview-count');
+
+		if (previewTools) {
+			previewTools.textContent = toolNames;
+		}
+		if (previewCount) {
+			previewCount.textContent = `${toolCount} tool${toolCount === 1 ? '' : 's'}`;
+		}
+
+		// Update button states AND re-attach event handlers to ensure they work
+		const approveBtn = previewElement.querySelector('.approve-model-btn');
+		const cancelBtn = previewElement.querySelector('.cancel-model-btn');
+
+		if (approveBtn) {
+			// Individual model buttons should always be enabled if this model has tool calls
+			// Don't use global canApprove flag - each model can be approved independently
+			approveBtn.disabled = false;
+			// Re-attach event handler to ensure it's not lost
+			approveBtn.onclick = () => approveModelToolCalls(modelId);
+		}
+		if (cancelBtn) {
+			// Individual model buttons should always be enabled if this model has tool calls
+			// Don't use global canCancel flag - each model can be cancelled independently
+			cancelBtn.disabled = false;
+			// Re-attach event handler to ensure it's not lost
+			cancelBtn.onclick = () => cancelModelToolCalls(modelId);
+		}
+	}
+
+	/**
+	 * Update the state of global approve/cancel all buttons
+	 */
+	function updateGlobalToolButtons() {
+		const approveButton = document.getElementById('approve-tools-global');
+		const cancelButton = document.getElementById('cancel-tools-global');
+
 		if (approveButton) {
-			approveButton.disabled = !toolCallState.canApprove;
+			approveButton.disabled = !toolCallState.canApprove || !toolCallState.isPreviewVisible;
+			approveButton.style.display = toolCallState.isPreviewVisible ? 'flex' : 'none';
 		}
 		if (cancelButton) {
-			cancelButton.disabled = !toolCallState.canCancel;
+			cancelButton.disabled = !toolCallState.canCancel || !toolCallState.isPreviewVisible;
+			cancelButton.style.display = toolCallState.isPreviewVisible ? 'flex' : 'none';
 		}
-
-		// Clear existing content
-		previewContent.innerHTML = '';
-
-		if (!toolCallState.isPreviewVisible) {
-			return;
-		}
-
-		// Create a more dynamic grid layout for tool approvals
-		const toolGrid = document.createElement('div');
-		toolGrid.className = 'tool-approval-grid';
-
-		toolCallState.toolCallPreviews.forEach((preview, index) => {
-			const model = modelSelectionState.availableModels.find(m => m.id === preview.modelId);
-			const modelName = model?.name || preview.modelId;
-			const modelProvider = model?.provider || '';
-
-			// Create a compact card for each model
-			const modelCard = document.createElement('div');
-			modelCard.className = 'tool-approval-card';
-			modelCard.setAttribute('data-model-id', preview.modelId);
-
-			// Generate summary of tool calls for quick preview
-			const toolSummary = preview.toolCalls.map(call => `${call.name}`).join(', ');
-			const isExpanded = false; // Start collapsed for cleaner UI
-
-			modelCard.innerHTML = `
-				<div class="tool-card-header" data-action="expand">
-					<div class="model-info">
-						<div class="model-name">${escapeHtml(modelName)}</div>
-						<div class="model-provider">${escapeHtml(modelProvider)}</div>
-					</div>
-					<div class="tool-summary">
-						<div class="tool-preview">${escapeHtml(toolSummary)}</div>
-						<div class="tool-count-badge">${preview.toolCalls.length}</div>
-					</div>
-					<div class="expand-indicator">
-						<span class="expand-arrow">▼</span>
-					</div>
-				</div>
-
-				<div class="tool-card-actions">
-					<button class="approve-model-btn quick-approve" data-model-id="${escapeHtml(preview.modelId)}" title="Approve all tools for ${escapeHtml(modelName)}">
-						<span class="btn-icon">✅</span>
-						<span class="btn-text">Approve</span>
-					</button>
-					<button class="cancel-model-btn quick-cancel" data-model-id="${escapeHtml(preview.modelId)}" title="Cancel all tools for ${escapeHtml(modelName)}">
-						<span class="btn-icon">❌</span>
-						<span class="btn-text">Cancel</span>
-					</button>
-				</div>
-
-				<div class="tool-details" style="display: none;">
-					<div class="tool-details-header">
-						<span>Tool Details</span>
-						<button class="details-close" data-action="collapse" title="Collapse details">×</button>
-					</div>
-					<div class="tool-call-list">
-						${preview.toolCalls.map(toolCall => {
-				// Parse arguments safely
-				let parsedArgs;
-				try {
-					parsedArgs = typeof toolCall.arguments === 'string'
-						? JSON.parse(toolCall.arguments)
-						: toolCall.arguments;
-				} catch (e) {
-					parsedArgs = toolCall.arguments;
-				}
-
-				// Create a more compact representation of arguments
-				const argsPreview = JSON.stringify(parsedArgs, null, 2);
-				const shortArgs = argsPreview.length > 100
-					? argsPreview.substring(0, 100) + '...'
-					: argsPreview;
-
-				return `
-								<div class="tool-call-compact">
-									<div class="tool-call-header">
-										<span class="tool-name">🔧 ${escapeHtml(toolCall.name)}</span>
-										<span class="tool-id">${escapeHtml(toolCall.id.substring(0, 8))}</span>
-									</div>
-									<div class="tool-args-compact">
-										<pre>${escapeHtml(shortArgs)}</pre>
-									</div>
-								</div>
-							`;
-			}).join('')}
-					</div>
-				</div>
-			`;
-
-			toolGrid.appendChild(modelCard);
-		});
-
-		previewContent.appendChild(toolGrid);
-
-		// Add event listeners for individual model approve/cancel buttons
-		previewContent.querySelectorAll('.approve-model-btn').forEach(btn => {
-			btn.onclick = () => approveModelToolCalls(btn.dataset.modelId);
-		});
-
-		previewContent.querySelectorAll('.cancel-model-btn').forEach(btn => {
-			btn.onclick = () => cancelModelToolCalls(btn.dataset.modelId);
-		});
-
-		// Add event listeners for expand/collapse functionality
-		previewContent.querySelectorAll('.tool-card-header[data-action="expand"]').forEach(header => {
-			header.onclick = (e) => {
-				e.preventDefault();
-				const card = header.closest('.tool-approval-card');
-				const modelId = card.getAttribute('data-model-id');
-				toggleToolCardExpansion(modelId);
-			};
-		});
-
-		previewContent.querySelectorAll('.details-close[data-action="collapse"]').forEach(btn => {
-			btn.onclick = (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				const card = btn.closest('.tool-approval-card');
-				const modelId = card.getAttribute('data-model-id');
-				toggleToolCardExpansion(modelId);
-			};
-		});
 	}
-
-	/**
-	 * Toggle expansion of tool card details
-	 */
-	function toggleToolCardExpansion(modelId) {
-		const card = document.querySelector(`[data-model-id="${modelId}"]`);
-		if (!card) {
-			console.error(`🔧 Tool card not found: ${modelId}`);
-			return;
-		}
-
-		const details = card.querySelector('.tool-details');
-		const arrow = card.querySelector('.expand-arrow');
-
-		if (!details || !arrow) {
-			console.error(`🔧 Tool card elements missing for: ${modelId}`);
-			return;
-		}
-
-		const isExpanded = details.style.display !== 'none';
-		const action = isExpanded ? 'collapsed' : 'expanded';
-
-		// Toggle state
-		if (isExpanded) {
-			details.style.display = 'none';
-			arrow.textContent = '▼';
-			card.classList.remove('expanded');
-		} else {
-			details.style.display = 'block';
-			arrow.textContent = '▲';
-			card.classList.add('expanded');
-		}
-
-		// Single clean log line
-		console.log(`🔧 Tool card ${action}: ${modelId}`);
-	}	// Make function globally available
-	window.toggleToolCardExpansion = toggleToolCardExpansion;
 
 	/**
 	 * Approve all tool calls
@@ -1107,13 +1089,6 @@
 
 			await sendMessage('cancel-model-tools', { modelId });
 
-			// If this was the only selected model, reset loading state
-			// Otherwise, keep loading state active since other models might still be processing
-			if (modelSelectionState.selectedModels.length === 1) {
-				chatState.isLoading = false;
-				updateChatUI();
-			}
-
 			showNotification(`❌ Tool calls cancelled for ${modelName}`);
 		} catch (error) {
 			console.error(`Failed to cancel tool calls for ${modelId}:`, error);
@@ -1140,8 +1115,8 @@
 		}
 
 		// Set up tool call event listeners
-		const approveToolsButton = document.getElementById('approve-tools');
-		const cancelToolsButton = document.getElementById('cancel-tools');
+		const approveToolsButton = document.getElementById('approve-tools-global');
+		const cancelToolsButton = document.getElementById('cancel-tools-global');
 
 		if (approveToolsButton) {
 			approveToolsButton.onclick = approveToolCalls;
