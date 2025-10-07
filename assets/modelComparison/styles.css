@@ -128,13 +128,68 @@ p {
 	right: 6px;
 	margin: 0;
 	accent-color: var(--vscode-focusBorder);
+	width: 16px;
+	height: 16px;
+}
+
+.model-tools-icon {
+	position: absolute;
+	top: 28px; /* Position directly below checkbox (6px top + 16px height + 6px gap) */
+	right: 6px;
+	background: var(--vscode-button-secondaryBackground);
+	border: 1px solid var(--vscode-button-secondaryBorder, transparent);
+	color: var(--vscode-button-secondaryForeground);
+	padding: 0;
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 12px;
+	transition: background-color 0.2s, border-color 0.2s, transform 0.1s;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	opacity: 0.85;
+	width: 16px;
+	height: 16px;
+	line-height: 1;
+}
+
+.model-tools-icon:hover {
+	background-color: var(--vscode-button-secondaryHoverBackground);
+	border-color: var(--vscode-focusBorder);
+	opacity: 1;
+	transform: scale(1.1);
+}
+
+.model-tools-icon:active {
+	transform: scale(0.95);
+}
+
+.model-tools-icon.modified {
+	border-color: var(--vscode-charts-blue);
+	background-color: var(--vscode-inputOption-activeBackground, var(--vscode-button-secondaryBackground));
+}
+
+.model-tools-icon.modified::after {
+	content: '●';
+	color: var(--vscode-charts-blue);
+	font-size: 6px;
+	position: absolute;
+	top: -3px;
+	right: -3px;
+	background: var(--vscode-editor-background);
+	border-radius: 50%;
+	width: 6px;
+	height: 6px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .model-info {
 	display: flex;
 	flex-direction: column;
 	flex: 1;
-	padding-right: 20px; /* Space for checkbox */
+	padding-right: 28px; /* Space for checkbox and icon (6px margin + 16px width + 6px padding) */
 }
 
 .model-name {
@@ -683,3 +738,163 @@ p {
 	overflow-y: auto;
 }
 
+/* Prompt Editor Modal Styles */
+.modal {
+	display: none; /* Hidden by default */
+	position: fixed;
+	z-index: 1000;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	overflow: auto;
+	background-color: rgba(0, 0, 0, 0.6);
+}
+
+.modal.show {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.modal-content {
+	background-color: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	width: 90%;
+	max-width: 700px;
+	max-height: 80vh;
+	display: flex;
+	flex-direction: column;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.modal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px 20px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.modal-header h2 {
+	margin: 0;
+	font-size: 16px;
+	color: var(--vscode-foreground);
+}
+
+.modal-close {
+	background: none;
+	border: none;
+	color: var(--vscode-foreground);
+	font-size: 28px;
+	font-weight: 300;
+	cursor: pointer;
+	padding: 0;
+	width: 28px;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	opacity: 0.6;
+	transition: opacity 0.2s;
+}
+
+.modal-close:hover {
+	opacity: 1;
+}
+
+.modal-body {
+	padding: 20px;
+	flex: 1;
+	overflow-y: auto;
+}
+
+.prompt-editor-section {
+	margin-bottom: 16px;
+}
+
+.prompt-editor-section label {
+	display: block;
+	margin-bottom: 8px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.prompt-editor-section textarea {
+	width: 100%;
+	min-height: 250px;
+	padding: 12px;
+	background-color: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	border: 1px solid var(--vscode-input-border);
+	border-radius: 4px;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 13px);
+	resize: vertical;
+	box-sizing: border-box;
+}
+
+.prompt-editor-section textarea:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.prompt-editor-info {
+	background-color: var(--vscode-textBlockQuote-background);
+	border-left: 4px solid var(--vscode-textBlockQuote-border);
+	padding: 12px;
+	border-radius: 4px;
+	margin-top: 12px;
+}
+
+.prompt-editor-info .info-text {
+	margin: 0;
+	font-size: 13px;
+	color: var(--vscode-foreground);
+}
+
+.modal-footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px 20px;
+	border-top: 1px solid var(--vscode-panel-border);
+}
+
+.modal-footer-right {
+	display: flex;
+	gap: 8px;
+}
+
+/* Edit prompt button in model response headers */
+.edit-prompt-button {
+	background-color: var(--vscode-button-secondaryBackground);
+	border: 1px solid var(--vscode-button-secondaryBorder, var(--vscode-button-border));
+	color: var(--vscode-button-secondaryForeground);
+	padding: 4px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 12px;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
+	opacity: 0.7;
+}
+
+.edit-prompt-button:hover {
+	background-color: var(--vscode-button-secondaryHoverBackground);
+	border-color: var(--vscode-button-secondaryHoverBorder, var(--vscode-button-border));
+	opacity: 1;
+}
+
+.edit-prompt-button.modified {
+	border-color: var(--vscode-charts-blue);
+	color: var(--vscode-charts-blue);
+}
+
+.edit-prompt-button.modified::after {
+	content: '●';
+	margin-left: 2px;
+}

@@ -9,6 +9,7 @@ import { IInstantiationService } from '../../../util/vs/platform/instantiation/c
 import { ChatRequestTurn, ChatResponseTurn } from '../../../vscodeTypes';
 import { PauseController } from '../../intents/node/pauseController';
 import { ComparisonToolCoordinator, IComparisonToolState } from './comparisonToolCoordinator';
+import { PromptModificationStore } from './promptModificationStore';
 import { SingleModelChatHandler } from './singleModelChatHandler';
 import { IToolCallDetection, ToolCallDetectionService } from './toolCallDetectionService';
 import { IFormattedToolCall } from './toolCallFormatter';
@@ -58,7 +59,8 @@ export class ComparisonChatOrchestrator extends Disposable {
 	private readonly modelCancellationTokenSources = new Map<string, CancellationTokenSource>();
 
 	constructor(
-		private readonly instantiationService: IInstantiationService
+		private readonly instantiationService: IInstantiationService,
+		private readonly promptModificationStore?: PromptModificationStore
 	) {
 		super();
 
@@ -139,7 +141,7 @@ export class ComparisonChatOrchestrator extends Disposable {
 			// Get or create handler for this model
 			let handler = this.chatHandlers.get(modelId);
 			if (!handler) {
-				handler = this._register(new SingleModelChatHandler(this.instantiationService));
+				handler = this._register(new SingleModelChatHandler(this.instantiationService, this.promptModificationStore));
 				this.chatHandlers.set(modelId, handler);
 			}
 

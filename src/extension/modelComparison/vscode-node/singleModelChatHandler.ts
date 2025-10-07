@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { Raw } from '@vscode/prompt-tsx';
 import type { ChatPromptReference, ChatRequest, ExtendedChatResponsePart } from 'vscode';
 import { getChatParticipantIdFromName } from '../../../platform/chat/common/chatAgents';
 import { IRequestLogger } from '../../../platform/requestLogger/node/requestLogger';
@@ -14,10 +15,14 @@ import { generateUuid } from '../../../util/vs/base/common/uuid';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { ChatLocation, ChatRequestTurn, ChatResponseMarkdownPart, ChatResponseTurn } from '../../../vscodeTypes';
 import { Intent } from '../../common/constants';
+import { IIntentService } from '../../intents/node/intentService';
 import { PauseController } from '../../intents/node/pauseController';
+import { ChatVariablesCollection } from '../../prompt/common/chatVariablesCollection';
 import { ChatParticipantRequestHandler, IChatAgentArgs } from '../../prompt/node/chatParticipantRequestHandler';
+import { IIntentInvocationContext } from '../../prompt/node/intents';
 import { getContributedToolName } from '../../tools/common/toolNames';
 import { IToolsService } from '../../tools/common/toolsService';
+import { PromptModificationStore } from './promptModificationStore';
 import { IFormattedToolCall, ToolCallFormatter } from './toolCallFormatter';
 
 /**
@@ -57,9 +62,11 @@ export class SingleModelChatHandler implements IDisposable {
 	private _isDisposed = false;
 	private _endpointCache = new Map<string, any>();
 	private _toolCallTracking = new Map<ChatRequest, IFormattedToolCall[]>();
+	private static _originalAgentInvoke: any = null; // Store the original invoke method once
 
 	constructor(
-		private readonly instantiationService: IInstantiationService
+		private readonly instantiationService: IInstantiationService,
+		private readonly promptModificationStore?: PromptModificationStore
 	) { }
 
 	/**
@@ -71,6 +78,10 @@ export class SingleModelChatHandler implements IDisposable {
 	 * @param onProgress Optional streaming progress callback for text chunks
 	 * @param modelMetadata Optional model metadata to create the LanguageModelChat object
 	 * @param onDelta Optional callback for streaming delta with tool calls
+	 * @param onCompletion Optional callback when the request completes
+	 * @param onToolCall Optional callback when a tool call is detected
+	 * @param onPromptRendered Optional callback when the prompt is rendered (before sending to model)
+	 * @param promptModifier Optional function to modify the prompt messages before sending
 	 * @returns Promise that resolves when the response is complete
 	 */
 	async sendChatMessage(
@@ -82,12 +93,18 @@ export class SingleModelChatHandler implements IDisposable {
 		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string },
 		onDelta?: (modelId: string, text: string, delta: any) => void,
 		onCompletion?: (modelId: string) => void,
-		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void
+		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void,
+		onPromptRendered?: (modelId: string, messages: Raw.ChatMessage[]) => void,
+		promptModifier?: (modelId: string, messages: Raw.ChatMessage[]) => Raw.ChatMessage[]
 	): Promise<{ response: string; error?: string; toolCalls?: IFormattedToolCall[] }> {
 
 		if (this._isDisposed) {
 			throw new Error('SingleModelChatHandler has been disposed');
 		}
+
+		// Variables for intent restoration (declared outside try to be accessible in finally)
+		let originalInvoke: any = null;
+		let agentIntent: any = null;
 
 		try {
 			// Create a proper ChatRequest for the model comparison
@@ -300,6 +317,133 @@ export class SingleModelChatHandler implements IDisposable {
 			// Extract the underlying CancellationToken if we have a PauseController
 			const actualCancellationToken = (cancellationToken as any).token ?? cancellationToken;
 
+			// PROMPT INTERCEPTION: Wrap the agent intent to intercept and modify prompts
+			// This allows us to capture and modify the prompt before it's sent to the model
+			// while still using ChatParticipantRequestHandler for all its benefits
+			//
+			// First, check if we have stored prompt modifications for this model
+			const storedModification = this.promptModificationStore?.getModification(modelId);
+
+			// Create a combined prompt modifier that applies both stored modifications and custom modifiers
+			const combinedPromptModifier = (modelId: string, messages: Raw.ChatMessage[]): Raw.ChatMessage[] => {
+				let modifiedMessages = [...messages];
+
+				// Apply stored modifications first (if any)
+				if (storedModification?.customSystemMessage) {
+					// Find the system message
+					const systemMessageIndex = modifiedMessages.findIndex(msg => msg.role === Raw.ChatRole.System);
+
+					if (systemMessageIndex !== -1) {
+						const originalContent = modifiedMessages[systemMessageIndex].content;
+
+						if (storedModification.replaceSystemMessage) {
+							// Replace the entire system message
+							// Need to match the format of the original content
+							let newContent: any;
+							if (Array.isArray(originalContent)) {
+								// Original was an array format, maintain the same structure
+								newContent = [{
+									type: Raw.ChatCompletionContentPartKind.Text,
+									text: storedModification.customSystemMessage
+								}];
+							} else {
+								// Original was a string
+								newContent = storedModification.customSystemMessage;
+							}
+
+							modifiedMessages[systemMessageIndex] = {
+								...modifiedMessages[systemMessageIndex],
+								content: newContent
+							};
+							console.log(`[SingleModelChatHandler] ${modelId} - Replaced system message with custom prompt`);
+						} else {
+							// Prepend to the system message
+							const contentStr = typeof originalContent === 'string' ? originalContent :
+								(Array.isArray(originalContent) ? originalContent.map((part: any) => part.text || '').join('\n') : JSON.stringify(originalContent));
+
+							let newContent: any;
+							if (Array.isArray(originalContent)) {
+								// Maintain array format
+								newContent = [{
+									type: Raw.ChatCompletionContentPartKind.Text,
+									text: `${storedModification.customSystemMessage}\n\n${contentStr}`
+								}];
+							} else {
+								// Maintain string format
+								newContent = `${storedModification.customSystemMessage}\n\n${contentStr}`;
+							}
+
+							modifiedMessages[systemMessageIndex] = {
+								...modifiedMessages[systemMessageIndex],
+								content: newContent
+							};
+							console.log(`[SingleModelChatHandler] ${modelId} - Prepended custom prompt to system message`);
+						}
+					}
+				}
+
+				// Apply custom modifier if provided
+				if (promptModifier) {
+					modifiedMessages = promptModifier(modelId, modifiedMessages);
+				}
+
+				return modifiedMessages;
+			};
+
+			// PROMPT INTERCEPTION: Set up intent wrapping if needed
+			if (onPromptRendered || promptModifier || storedModification) {
+				await this.instantiationService.invokeFunction(async accessor => {
+					const intentService = accessor.get(IIntentService);
+					agentIntent = intentService.getIntent(Intent.Agent, ChatLocation.Panel);
+
+					if (agentIntent) {
+						// Save the original invoke method (could be from a previous request or the true original)
+						// Store it at class level the first time we see it
+						if (SingleModelChatHandler._originalAgentInvoke === null) {
+							SingleModelChatHandler._originalAgentInvoke = agentIntent.invoke.bind(agentIntent);
+						}
+
+						// Always use the originally saved invoke method
+						originalInvoke = SingleModelChatHandler._originalAgentInvoke;
+
+						// Create a request-specific wrapper that captures the current modelId and storedModification
+						const requestSpecificInvoke = async (context: any) => {
+							// Call the ORIGINAL invoke (not the potentially wrapped one) to get the invocation object
+							const invocation = await originalInvoke(context);
+
+							// Wrap the buildPrompt method to intercept prompt rendering
+							const originalBuildPrompt = invocation.buildPrompt.bind(invocation);
+							invocation.buildPrompt = async (promptContext: any, progress: any, token: any) => {
+								// Call the original buildPrompt to get the rendered prompt
+								const result = await originalBuildPrompt(promptContext, progress, token);
+
+								// Notify the caller about the rendered prompt (for display/inspection)
+								if (onPromptRendered) {
+									onPromptRendered(modelId, result.messages);
+								}
+
+								// Allow the caller to modify the prompt before sending to the model
+								if (promptModifier || storedModification) {
+									const modifiedMessages = combinedPromptModifier(modelId, result.messages);
+									// Return a new result object with modified messages
+									return {
+										...result,
+										messages: modifiedMessages
+									};
+								}
+
+								return result;
+							};
+
+							return invocation;
+						};
+
+						// Temporarily replace the invoke method with our request-specific wrapper
+						agentIntent.invoke = requestSpecificInvoke;
+					}
+				});
+			}
+
 			// Create the request handler
 			const requestHandler = this.instantiationService.createInstance(
 				ChatParticipantRequestHandler,
@@ -347,6 +491,12 @@ export class SingleModelChatHandler implements IDisposable {
 				error: errorMsg,
 				toolCalls: []
 			};
+		} finally {
+			// CRITICAL: Restore the original intent invoke method if we modified it
+			if (agentIntent && originalInvoke) {
+				agentIntent.invoke = originalInvoke;
+				console.log(`[SingleModelChatHandler] ${modelId} - Restored original intent invoke method`);
+			}
 		}
 	}
 
@@ -355,6 +505,182 @@ export class SingleModelChatHandler implements IDisposable {
 	 */
 	public getToolCallsForRequest(chatRequest: ChatRequest): IFormattedToolCall[] {
 		return this._toolCallTracking.get(chatRequest) || [];
+	}
+
+	/**
+	 * Capture the original system message that would be used for a model
+	 * This renders the prompt without actually sending it to the model
+	 */
+	async captureOriginalSystemMessage(
+		modelId: string,
+		message: string = 'test',
+		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string }
+	): Promise<string | undefined> {
+		try {
+			// Create a temporary chat request
+			const chatRequest = new ModelComparisonChatRequest(message);
+
+			// Set up the model if we have metadata
+			if (modelMetadata) {
+				const modelCacheKey = JSON.stringify(modelMetadata);
+				let languageModelChat = this._endpointCache.get(modelCacheKey);
+
+				if (!languageModelChat) {
+					languageModelChat = {
+						id: modelMetadata.id,
+						name: modelMetadata.name,
+						vendor: 'copilot',
+						family: modelMetadata.family || modelMetadata.id,
+						version: modelMetadata.version || '1.0.0'
+					};
+					this._endpointCache.set(modelCacheKey, languageModelChat);
+				}
+
+				chatRequest.model = languageModelChat;
+			}
+
+			// Capture the rendered prompt using the intent system
+			let capturedSystemMessage: string | undefined;
+
+			await this.instantiationService.invokeFunction(async accessor => {
+				const intentService = accessor.get(IIntentService);
+				const agentIntent = intentService.getIntent(Intent.Agent, ChatLocation.Panel);
+
+				if (agentIntent) {
+					// Store the original invoke method
+					const originalInvoke = agentIntent.invoke.bind(agentIntent);
+
+					// Temporarily replace invoke to capture the prompt
+					agentIntent.invoke = async (context) => {
+						const invocation = await originalInvoke(context);
+
+						// Wrap buildPrompt to capture the rendered messages
+						const originalBuildPrompt = invocation.buildPrompt.bind(invocation);
+						invocation.buildPrompt = async (promptContext, progress, token) => {
+							const result = await originalBuildPrompt(promptContext, progress, token);
+
+							// Extract system message
+							const systemMsg = result.messages.find((msg: Raw.ChatMessage) => msg.role === Raw.ChatRole.System);
+							if (systemMsg) {
+								if (typeof systemMsg.content === 'string') {
+									capturedSystemMessage = systemMsg.content;
+								} else if (Array.isArray(systemMsg.content)) {
+									// Extract text from array of message parts (e.g., [{type: 1, text: "..."}, ...])
+									capturedSystemMessage = systemMsg.content
+										.map((part: any) => part.text || '')
+										.filter((text: string) => text.length > 0)
+										.join('\n');
+								} else {
+									capturedSystemMessage = JSON.stringify(systemMsg.content);
+								}
+							}
+
+							return result;
+						};
+
+						return invocation;
+					};
+
+					// Create a minimal intent service context to trigger prompt building
+					try {
+						const intentContext: IIntentInvocationContext = {
+							request: chatRequest,
+							location: ChatLocation.Panel,
+							// documentContext is optional for Panel location
+							documentContext: undefined
+						};
+
+						const invocation = await agentIntent.invoke(intentContext);
+
+						// Trigger prompt building with minimal context
+						if (invocation && invocation.buildPrompt) {
+							// Create a minimal but valid IBuildPromptContext
+							const buildContext = {
+								query: message,
+								history: [], // Empty history for capturing just the system message
+								chatVariables: new ChatVariablesCollection([]) // Empty chat variables
+							};
+
+							await invocation.buildPrompt(buildContext as any, undefined as any, undefined as any);
+						}
+					} catch (error) {
+						console.error('[SingleModelChatHandler] Failed to capture system message:', error);
+					}
+
+					// Restore the original invoke method
+					agentIntent.invoke = originalInvoke;
+				}
+			});
+
+			return capturedSystemMessage;
+		} catch (error) {
+			console.error('[SingleModelChatHandler] Error capturing original system message:', error);
+			return undefined;
+		}
+	}
+
+	/**
+	 * Format prompt messages into a readable string for display
+	 */
+	public static formatPromptForDisplay(messages: Raw.ChatMessage[]): string {
+		return messages.map((msg, index) => {
+			const role = String(msg.role).toUpperCase();
+			const content = typeof msg.content === 'string'
+				? msg.content
+				: JSON.stringify(msg.content, null, 2);
+
+			const toolCalls = (msg as any).toolCalls?.map((tc: any) =>
+				`  Tool: ${tc.function.name}\n  Args: ${tc.function.arguments}`
+			).join('\n') || '';
+
+			return `[Message ${index + 1}: ${role}]\n${content}${toolCalls ? '\n' + toolCalls : ''}`;
+		}).join('\n\n---\n\n');
+	}
+
+	/**
+	 * Extract key information from prompt messages
+	 */
+	public static analyzePrompt(messages: Raw.ChatMessage[]): {
+		systemMessageCount: number;
+		userMessageCount: number;
+		assistantMessageCount: number;
+		totalTokensEstimate: number;
+		hasTools: boolean;
+	} {
+		let systemMessageCount = 0;
+		let userMessageCount = 0;
+		let assistantMessageCount = 0;
+		let totalChars = 0;
+		let hasTools = false;
+
+		for (const msg of messages) {
+			switch (msg.role) {
+				case Raw.ChatRole.System:
+					systemMessageCount++;
+					break;
+				case Raw.ChatRole.User:
+					userMessageCount++;
+					break;
+				case Raw.ChatRole.Assistant:
+					assistantMessageCount++;
+					break;
+			}
+
+			const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+			totalChars += content.length;
+
+			if ((msg as any).toolCalls && (msg as any).toolCalls.length > 0) {
+				hasTools = true;
+			}
+		}
+
+		return {
+			systemMessageCount,
+			userMessageCount,
+			assistantMessageCount,
+			totalTokensEstimate: Math.ceil(totalChars / 4), // Rough estimate: 4 chars per token
+			hasTools
+		};
 	}
 
 	/**

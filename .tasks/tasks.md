@@ -337,20 +337,20 @@ function generateMockResponse(model: string, message: string): string {
 
 ---
 
-### TASK 6: Tool Call Comparison and Analysis
+### [DONE] TASK 6: Tool Call Comparison and Analysis
 **Objective**: Provide detailed comparison of tool calls across models
 
 **Prerequisites**: Task 5 must be completed and tested
 
 **Implementation Details**:
-- Create tool call diff service to compare intended tool calls
+- [Deferred] Create tool call diff service to compare intended tool calls
 - Implement tool call visualization in the comparison UI
 - Add tool call parameter comparison and analysis
 - Create tool execution result comparison interface
 
 **Key Files**:
-- `src/extension/modelComparison/vscode-node/toolCallDiffService.ts`
-- `src/extension/modelComparison/vscode-node/toolVisualizationService.ts`
+- ~~src/extension/modelComparison/vscode-node/toolCallDiffService.ts~~
+- ~~src/extension/modelComparison/vscode-node/toolVisualizationService.ts~~
 - Update webview for tool call comparison display
 
 **Manual Testing Steps**:
@@ -370,7 +370,7 @@ function generateMockResponse(model: string, message: string): string {
 
 ---
 
-### TASK 7: Synchronized Tool Execution Control
+### [DONE] TASK 7: Synchronized Tool Execution Control
 **Objective**: Enable fine-grained control over tool execution across models
 
 **Prerequisites**: Task 6 must be completed and tested
@@ -382,8 +382,8 @@ function generateMockResponse(model: string, message: string): string {
 - Implement rollback mechanism for failed tool executions
 
 **Key Files**:
-- `src/extension/modelComparison/vscode-node/synchronizedToolExecutor.ts`
-- `src/extension/modelComparison/vscode-node/toolExecutionCoordinator.ts`
+- ~~src/extension/modelComparison/vscode-node/synchronizedToolExecutor.ts~~
+- ~~src/extension/modelComparison/vscode-node/toolExecutionCoordinator.ts~~
 
 **Manual Testing Steps**:
 1. Trigger tool calls on multiple models
@@ -401,27 +401,6 @@ function generateMockResponse(model: string, message: string): string {
 ---
 
 ## Phase 4: Advanced Comparison Features
-
-### TASK 8: Response Quality Analysis
-**Objective**: Provide tools for analyzing and comparing response quality
-
-**Implementation Details**:
-- Create response comparison metrics (length, structure, accuracy)
-- Implement side-by-side response diff visualization
-- Add response rating and annotation system
-- Create export functionality for comparison results
-
-**Key Files**:
-- `src/extension/modelComparison/vscode-node/responseAnalysisService.ts`
-- `src/extension/modelComparison/vscode-node/responseDiffService.ts`
-- `src/extension/modelComparison/vscode-node/comparisonExportService.ts`
-
-**Acceptance Criteria**:
-- Clear visual diff between responses
-- Quality metrics displayed
-- Can export comparison results
-
----
 
 ### TASK 8: Response Quality Analysis
 **Objective**: Provide tools for analyzing and comparing response quality

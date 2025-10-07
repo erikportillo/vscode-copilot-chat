@@ -192,6 +192,17 @@
 	};
 
 	/**
+	 * State management for prompt editing
+	 */
+	const promptEditorState = {
+		isOpen: false,
+		currentModelId: null,
+		currentModification: null,
+		originalSystemMessage: '', // Track the original system message for reset functionality
+		modifiedModels: new Set() // Track which models have custom prompts
+	};
+
+	/**
 	 * Streaming progress tracking
 	 */
 	const streamingStats = {
@@ -374,18 +385,51 @@
 
 		modelSelectionState.availableModels.forEach(model => {
 			const isSelected = modelSelectionState.selectedModels.includes(model.id);
+			const hasModification = promptEditorState.modifiedModels.has(model.id);
 
 			const modelItem = document.createElement('div');
 			modelItem.className = `model-item ${isSelected ? 'selected' : ''}`;
-			modelItem.onclick = () => toggleModel(model.id);
 
-			modelItem.innerHTML = `
-				<input type="checkbox" ${isSelected ? 'checked' : ''} readonly>
-				<div class="model-info">
-					<div class="model-name">${escapeHtml(model.name)}</div>
-					<div class="model-provider">${escapeHtml(model.provider)}</div>
-				</div>
-			`;
+			// Create checkbox
+			const checkbox = document.createElement('input');
+			checkbox.type = 'checkbox';
+			checkbox.checked = isSelected;
+			checkbox.onclick = (e) => {
+				e.stopPropagation(); // Prevent triggering modelInfo click
+				toggleModel(model.id);
+			};
+
+			// Create model info section
+			const modelInfo = document.createElement('div');
+			modelInfo.className = 'model-info';
+			modelInfo.onclick = () => toggleModel(model.id);
+
+			const modelName = document.createElement('div');
+			modelName.className = 'model-name';
+			modelName.textContent = model.name;
+
+			const modelProvider = document.createElement('div');
+			modelProvider.className = 'model-provider';
+			modelProvider.textContent = model.provider;
+
+			modelInfo.appendChild(modelName);
+			modelInfo.appendChild(modelProvider);
+
+			// Add tools icon for selected models
+			if (isSelected) {
+				const toolsIcon = document.createElement('button');
+				toolsIcon.className = `model-tools-icon ${hasModification ? 'modified' : ''}`;
+				toolsIcon.title = hasModification ? 'Edit custom prompt' : 'Customize prompt';
+				toolsIcon.innerHTML = '🛠️';
+				toolsIcon.onclick = (e) => {
+					e.stopPropagation(); // Prevent toggling selection
+					openPromptEditorForModel(model.id);
+				};
+				modelItem.appendChild(toolsIcon);
+			}
+
+			modelItem.appendChild(checkbox);
+			modelItem.appendChild(modelInfo);
 
 			modelList.appendChild(modelItem);
 		});
@@ -683,6 +727,10 @@
 			const header = document.createElement('div');
 			header.className = 'model-response-header';
 
+			const headerLeft = document.createElement('div');
+			headerLeft.style.display = 'flex';
+			headerLeft.style.flexDirection = 'column';
+
 			const title = document.createElement('div');
 			title.className = 'model-response-title';
 			title.textContent = model?.name || modelId;
@@ -691,8 +739,19 @@
 			provider.className = 'model-response-provider';
 			provider.textContent = model?.provider || '';
 
-			header.appendChild(title);
-			header.appendChild(provider);
+			headerLeft.appendChild(title);
+			headerLeft.appendChild(provider);
+
+			// Edit prompt button
+			const editPromptButton = document.createElement('button');
+			editPromptButton.className = 'edit-prompt-button';
+			editPromptButton.setAttribute('data-edit-prompt', modelId);
+			editPromptButton.innerHTML = '🛠️ Edit Prompt';
+			editPromptButton.title = 'Edit prompt';
+			editPromptButton.onclick = () => openPromptEditor(modelId);
+
+			header.appendChild(headerLeft);
+			header.appendChild(editPromptButton);
 
 			// Response content
 			const content = document.createElement('div');
@@ -815,6 +874,10 @@
 			const header = document.createElement('div');
 			header.className = 'model-response-header';
 
+			const headerLeft = document.createElement('div');
+			headerLeft.style.display = 'flex';
+			headerLeft.style.flexDirection = 'column';
+
 			const title = document.createElement('div');
 			title.className = 'model-response-title';
 			title.textContent = model?.name || modelId;
@@ -823,8 +886,19 @@
 			provider.className = 'model-response-provider';
 			provider.textContent = model?.provider || '';
 
-			header.appendChild(title);
-			header.appendChild(provider);
+			headerLeft.appendChild(title);
+			headerLeft.appendChild(provider);
+
+			// Edit prompt button
+			const editPromptButton = document.createElement('button');
+			editPromptButton.className = 'edit-prompt-button';
+			editPromptButton.setAttribute('data-edit-prompt', modelId);
+			editPromptButton.innerHTML = '🛠️ Edit Prompt';
+			editPromptButton.title = 'Edit prompt';
+			editPromptButton.onclick = () => openPromptEditor(modelId);
+
+			header.appendChild(headerLeft);
+			header.appendChild(editPromptButton);
 
 			// Loading content
 			const content = document.createElement('div');
@@ -1097,6 +1171,231 @@
 	}
 
 	/**
+	 * PROMPT EDITING FUNCTIONALITY
+	 */
+
+	/**
+	 * Open the prompt editor for a model from the model selection area
+	 * This retrieves the model metadata and opens the editor
+	 * @param {string} modelId - The ID of the model to edit
+	 */
+	async function openPromptEditorForModel(modelId) {
+		console.log(`🔧 Opening prompt editor for model selection: ${modelId}`);
+
+		// Get model metadata
+		const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+		if (!model) {
+			console.error(`Model ${modelId} not found`);
+			return;
+		}
+
+		// Open the prompt editor with model metadata
+		await openPromptEditor(modelId);
+	}
+
+	/**
+	 * Open the prompt editor modal for a specific model
+	 * @param {string} modelId - The ID of the model to edit
+	 */
+	async function openPromptEditor(modelId) {
+		console.log(`🔧 Opening prompt editor for ${modelId}`);
+
+		const modal = document.getElementById('prompt-editor-modal');
+		const titleElement = document.getElementById('prompt-editor-title');
+		const textareaElement = document.getElementById('system-message-editor');
+
+		if (!modal || !textareaElement) {
+			console.error('Prompt editor elements not found');
+			return;
+		}
+
+		// Update state
+		promptEditorState.isOpen = true;
+		promptEditorState.currentModelId = modelId;
+
+		// Update title
+		if (titleElement) {
+			const modelName = getModelDisplayName(modelId);
+			titleElement.textContent = `Edit Prompt for ${modelName}`;
+		}
+
+		// Show loading state
+		textareaElement.value = 'Loading...';
+		textareaElement.disabled = true;
+
+		// Load current modification from extension
+		try {
+			const response = await sendMessage('get-model-prompt', { modelId });
+			promptEditorState.currentModification = response.modification || null;
+			promptEditorState.originalSystemMessage = response.originalSystemMessage || '';
+
+			// Populate the editor with either the custom message or the original
+			if (response.modification?.customSystemMessage) {
+				// User has a saved custom message
+				textareaElement.value = response.modification.customSystemMessage;
+			} else {
+				// No custom message, show the original
+				textareaElement.value = promptEditorState.originalSystemMessage;
+			}
+
+			textareaElement.disabled = false;
+
+		} catch (error) {
+			console.error('Failed to load prompt modification:', error);
+			textareaElement.value = 'Error loading system message';
+			textareaElement.disabled = false;
+		}
+
+		// Show modal
+		modal.classList.add('show');
+	}
+
+	/**
+	 * Close the prompt editor modal
+	 */
+	function closePromptEditor() {
+		const modal = document.getElementById('prompt-editor-modal');
+		if (modal) {
+			modal.classList.remove('show');
+		}
+
+		// Reset state
+		promptEditorState.isOpen = false;
+		promptEditorState.currentModelId = null;
+		promptEditorState.currentModification = null;
+		promptEditorState.originalSystemMessage = '';
+	}
+
+	/**
+	 * Save the current prompt modification
+	 */
+	async function savePromptModification() {
+		const modelId = promptEditorState.currentModelId;
+		if (!modelId) {
+			console.error('No model selected for prompt editing');
+			return;
+		}
+
+		const textareaElement = document.getElementById('system-message-editor');
+
+		if (!textareaElement) {
+			console.error('Prompt editor textarea not found');
+			return;
+		}
+
+		const editedMessage = textareaElement.value.trim();
+		const originalMessage = promptEditorState.originalSystemMessage.trim();
+
+		// Check if the message has been changed from the original
+		const hasModification = editedMessage !== originalMessage;
+
+		try {
+			await sendMessage('save-model-prompt', {
+				modelId,
+				modification: hasModification ? {
+					customSystemMessage: editedMessage,
+					replaceSystemMessage: true // Always replace since we're editing the full message
+				} : null // If unchanged, clear the modification
+			});
+
+			console.log(`✅ Saved prompt modification for ${modelId}`);
+
+			// Update modified models tracking
+			if (hasModification) {
+				promptEditorState.modifiedModels.add(modelId);
+			} else {
+				promptEditorState.modifiedModels.delete(modelId);
+			}
+
+			// Update the edit button to show modification status
+			updateEditButtonState(modelId, hasModification);
+
+			// Re-render model list to update tools icon state
+			renderModelList();
+
+			// Close the modal
+			closePromptEditor();
+
+		} catch (error) {
+			console.error('Failed to save prompt modification:', error);
+			alert('Failed to save prompt modification. Please try again.');
+		}
+	}
+
+	/**
+	 * Reset the prompt to default (remove modification)
+	 */
+	async function resetPromptToDefault() {
+		const modelId = promptEditorState.currentModelId;
+		if (!modelId) {
+			console.error('No model selected for prompt reset');
+			return;
+		}
+
+		const textareaElement = document.getElementById('system-message-editor');
+		if (!textareaElement) {
+			console.error('Prompt editor textarea not found');
+			return;
+		}
+
+		// Restore the original system message in the textarea
+		textareaElement.value = promptEditorState.originalSystemMessage;
+
+		console.log(`🔄 Reset prompt editor to original for ${modelId}`);
+	}
+
+	/**
+	 * Update the state of an edit button to show if a model has a custom prompt
+	 * @param {string} modelId - The model ID
+	 * @param {boolean} hasModification - Whether the model has a custom prompt
+	 */
+	function updateEditButtonState(modelId, hasModification) {
+		const button = document.querySelector(`[data-edit-prompt="${modelId}"]`);
+		if (button) {
+			if (hasModification) {
+				button.classList.add('modified');
+				button.title = 'Edit custom prompt (modified)';
+			} else {
+				button.classList.remove('modified');
+				button.title = 'Edit prompt';
+			}
+		}
+	}
+
+	/**
+	 * Get a display name for a model
+	 * @param {string} modelId - The model ID
+	 * @returns {string} Display name
+	 */
+	function getModelDisplayName(modelId) {
+		const model = modelSelectionState.availableModels.find(m => m.id === modelId);
+		return model?.name || modelId;
+	}
+
+	/**
+	 * Load prompt modification status for all selected models
+	 */
+	async function loadPromptModificationStatus() {
+		for (const modelId of modelSelectionState.selectedModels) {
+			try {
+				const response = await sendMessage('get-model-prompt', { modelId });
+
+				// Update edit button state
+				updateEditButtonState(modelId, response.hasModification);
+
+				// Update modified models tracking for tools icon
+				if (response.hasModification) {
+					promptEditorState.modifiedModels.add(modelId);
+				} else {
+					promptEditorState.modifiedModels.delete(modelId);
+				}
+			} catch (error) {
+				console.error(`Failed to load modification status for ${modelId}:`, error);
+			}
+		}
+	}
+
+	/**
 	 * Initialize the webview
 	 */
 	async function init() {
@@ -1167,6 +1466,44 @@
 			chatInput.addEventListener('input', updateSendButton);
 		}
 
+		// Set up prompt editor event listeners
+		const closePromptEditorBtn = document.getElementById('close-prompt-editor');
+		const cancelPromptEditBtn = document.getElementById('cancel-prompt-edit');
+		const savePromptBtn = document.getElementById('save-prompt');
+		const resetPromptBtn = document.getElementById('reset-prompt');
+		const promptEditorModal = document.getElementById('prompt-editor-modal');
+
+		if (closePromptEditorBtn) {
+			closePromptEditorBtn.onclick = closePromptEditor;
+		}
+
+		if (cancelPromptEditBtn) {
+			cancelPromptEditBtn.onclick = closePromptEditor;
+		}
+
+		if (savePromptBtn) {
+			savePromptBtn.onclick = savePromptModification;
+		}
+
+		if (resetPromptBtn) {
+			resetPromptBtn.onclick = resetPromptToDefault;
+		}
+
+		// Close modal when clicking outside
+		if (promptEditorModal) {
+			promptEditorModal.onclick = (event) => {
+				if (event.target === promptEditorModal) {
+					closePromptEditor();
+				}
+			};
+		}
+
+		// Close modal on Escape key
+		document.addEventListener('keydown', (event) => {
+			if (event.key === 'Escape' && promptEditorState.isOpen) {
+				closePromptEditor();
+			}
+		});
 
 
 		// Initialize model selection
@@ -1176,6 +1513,9 @@
 				loadAvailableModels(),
 				loadSelectedModels()
 			]);
+
+			// Load prompt modification status for all selected models
+			await loadPromptModificationStatus();
 
 			// Only log summary for debugging
 			console.log(`🤖 Initialized: ${modelSelectionState.availableModels.length} available, ${modelSelectionState.selectedModels.length} selected`);
@@ -1220,6 +1560,10 @@
 		modelSelectionState,
 		chatState,
 		updateUI,
+		openPromptEditor,
+		closePromptEditor,
+		savePromptModification,
+		resetPromptToDefault,
 		// Debug utilities
 		getStreamingSummary,
 		enableStreamingDebug: () => { streamingStats.debugMode = true; console.log('📡 Streaming debug enabled'); },

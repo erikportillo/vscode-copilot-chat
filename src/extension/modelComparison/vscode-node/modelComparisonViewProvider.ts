@@ -11,6 +11,7 @@ import { IInstantiationService } from '../../../util/vs/platform/instantiation/c
 import { ChatRequestCloner } from './chatRequestCloner';
 import { ComparisonChatOrchestrator } from './comparisonChatOrchestrator';
 import { ModelSelectionService } from './modelSelectionService';
+import { PromptModificationStore } from './promptModificationStore';
 import { ResponseAggregator } from './responseAggregator';
 import { SingleModelChatHandler } from './singleModelChatHandler';
 
@@ -25,6 +26,7 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 	private readonly singleModelChatHandler: SingleModelChatHandler;
 	private readonly comparisonChatOrchestrator: ComparisonChatOrchestrator;
 	private readonly responseAggregator: ResponseAggregator;
+	private readonly promptModificationStore: PromptModificationStore;
 	private modelMetadataMap: Map<string, { id: string; name: string; family?: string; version?: string; vendor?: string }> = new Map();
 	private webview?: vscode.Webview;
 
@@ -39,11 +41,14 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 		// Initialize the model selection service with endpoint provider
 		this.modelSelectionService = this._register(new ModelSelectionService(context, endpointProvider));
 
-		// Initialize the single model chat handler (kept for backward compatibility)
-		this.singleModelChatHandler = this._register(new SingleModelChatHandler(instantiationService));
+		// Initialize the prompt modification store
+		this.promptModificationStore = this._register(new PromptModificationStore(context));
 
-		// Initialize the multi-model comparison orchestrator
-		this.comparisonChatOrchestrator = this._register(new ComparisonChatOrchestrator(instantiationService));
+		// Initialize the single model chat handler with prompt modification store
+		this.singleModelChatHandler = this._register(new SingleModelChatHandler(instantiationService, this.promptModificationStore));
+
+		// Initialize the multi-model comparison orchestrator with prompt modification store
+		this.comparisonChatOrchestrator = this._register(new ComparisonChatOrchestrator(instantiationService, this.promptModificationStore));
 
 		// Initialize the response aggregator
 		this.responseAggregator = this._register(new ResponseAggregator());
@@ -181,6 +186,35 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 
 
 				</div>
+
+				<!-- Prompt Editor Modal -->
+				<div id="prompt-editor-modal" class="modal">
+					<div class="modal-content">
+						<div class="modal-header">
+							<h2 id="prompt-editor-title">Edit Prompt for Model</h2>
+							<button class="modal-close" id="close-prompt-editor" title="Close">&times;</button>
+						</div>
+						<div class="modal-body">
+							<div class="prompt-editor-section">
+								<label for="system-message-editor">System Message:</label>
+								<textarea id="system-message-editor" rows="20" placeholder="Loading..."></textarea>
+								<div class="prompt-editor-info">
+									<p class="info-text">
+										💡 <strong>Tip:</strong> Edit the system message directly. Click "Reset to Default" to restore the original prompt.
+									</p>
+								</div>
+							</div>
+						</div>
+						<div class="modal-footer">
+							<button id="reset-prompt" class="secondary-button">Reset to Default</button>
+							<div class="modal-footer-right">
+								<button id="cancel-prompt-edit" class="secondary-button">Cancel</button>
+								<button id="save-prompt" class="primary-button">Save</button>
+							</div>
+						</div>
+					</div>
+				</div>
+
 				<script nonce="${nonce}" src="${scriptUri}"></script>
 			</body>
 			</html>`;
@@ -446,7 +480,91 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 					success: true,
 					message: `Tool calls cancelled for model ${modelId}`
 				};
-			} case 'send-chat-message': {
+			}
+
+			case 'get-model-prompt': {
+				// Get the prompt modification for a specific model
+				const { modelId } = message.data;
+				if (!modelId) {
+					throw new Error('Model ID is required');
+				}
+
+				const modification = this.promptModificationStore.getModification(modelId);
+
+				// Capture the original system message for display
+				let originalSystemMessage: string | undefined;
+				try {
+					const modelMetadata = this.modelMetadataMap.get(modelId);
+					originalSystemMessage = await this.singleModelChatHandler.captureOriginalSystemMessage(
+						modelId,
+						'test',
+						modelMetadata
+					);
+				} catch (error) {
+					console.error(`[ModelComparisonViewProvider] Failed to capture original system message for ${modelId}:`, error);
+				}
+
+				return {
+					modelId,
+					modification: modification || null,
+					hasModification: !!modification,
+					originalSystemMessage: originalSystemMessage || 'Unable to load system message'
+				};
+			}
+
+			case 'save-model-prompt': {
+				// Save a prompt modification for a specific model
+				const { modelId, modification } = message.data;
+				if (!modelId) {
+					throw new Error('Model ID is required');
+				}
+
+				// If modification is null or undefined, remove the modification (reset to default)
+				if (!modification) {
+					await this.promptModificationStore.removeModification(modelId);
+					console.log(`[ModelComparisonViewProvider] Cleared prompt modification for ${modelId} (reset to default)`);
+					return {
+						success: true,
+						modelId,
+						modification: null
+					};
+				}
+
+				// Only save if there's actual content
+				if (modification.customSystemMessage && modification.customSystemMessage.trim()) {
+					await this.promptModificationStore.setModification(modelId, modification);
+					console.log(`[ModelComparisonViewProvider] Saved prompt modification for ${modelId}`);
+				} else {
+					// If empty, remove the modification
+					await this.promptModificationStore.removeModification(modelId);
+					console.log(`[ModelComparisonViewProvider] Removed empty prompt modification for ${modelId}`);
+				}
+
+				return {
+					success: true,
+					modelId,
+					modification: this.promptModificationStore.getModification(modelId)
+				};
+			}
+
+			case 'reset-model-prompt': {
+				// Reset a model's prompt to default (remove modification)
+				const { modelId } = message.data;
+				if (!modelId) {
+					throw new Error('Model ID is required');
+				}
+
+				await this.promptModificationStore.removeModification(modelId);
+				console.log(`[ModelComparisonViewProvider] Reset prompt for ${modelId} to default`);
+
+				return {
+					success: true,
+					modelId,
+					hasModification: false
+				};
+			}
+
+			case 'send-chat-message': {
 				// Handle chat message using the new multi-model orchestrator
 				if (!message.data?.message || typeof message.data.message !== 'string') {
 					throw new Error('No message provided');
