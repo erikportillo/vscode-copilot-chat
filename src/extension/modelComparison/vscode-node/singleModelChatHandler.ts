@@ -44,6 +44,10 @@ class ModelComparisonChatRequest implements ChatRequest {
 	public id = generateUuid();
 	public sessionId = generateUuid();
 
+	// Store request-specific prompt modifier to avoid shared state issues
+	public promptModifier?: (messages: Raw.ChatMessage[]) => Raw.ChatMessage[];
+	public onPromptRendered?: (messages: Raw.ChatMessage[]) => void;
+
 	constructor(
 		public prompt: string,
 		references: readonly ChatPromptReference[] = []
@@ -146,6 +150,7 @@ export class SingleModelChatHandler implements IDisposable {
 		// Variables for intent restoration (declared outside try to be accessible in finally)
 		let originalInvoke: any = null;
 		let agentIntent: any = null;
+		let chatRequest: ModelComparisonChatRequest | undefined;
 
 		try {
 			// Gather context from editor if requested
@@ -155,30 +160,34 @@ export class SingleModelChatHandler implements IDisposable {
 			const allReferences = [...editorContext, ...additionalReferences];
 
 			// Create a proper ChatRequest for the model comparison
-			const chatRequest = new ModelComparisonChatRequest(message, allReferences);
+			chatRequest = new ModelComparisonChatRequest(message, allReferences);
+
+			// Create a non-nullable reference for TypeScript's benefit
+			// (chatRequest is definitely assigned at this point)
+			const request = chatRequest;
 
 			// Initialize tool call tracking for this request
-			this._toolCallTracking.set(chatRequest, []);
+			this._toolCallTracking.set(request, []);
 
 			// Subscribe to tool call events from the RequestLogger
 			const requestLogger = this.instantiationService.invokeFunction(accessor => accessor.get(IRequestLogger));
-			console.log(`[SingleModelChatHandler] ${modelId} - Subscribing to tool calls for request:`, chatRequest.id);
+			console.log(`[SingleModelChatHandler] ${modelId} - Subscribing to tool calls for request:`, request.id);
 
 			const toolCallDisposable = requestLogger.onDidLogToolCall(toolCall => {
 				console.log(`[SingleModelChatHandler] ${modelId} - Tool call event received:`, {
 					toolName: toolCall.name,
 					toolRequestId: toolCall.chatRequest?.id,
-					ourRequestId: chatRequest.id,
-					match: toolCall.chatRequest?.id === chatRequest.id
+					ourRequestId: request.id,
+					match: toolCall.chatRequest?.id === request.id
 				});
 
 				// Only track tool calls for this specific chat request
 				// Compare by ID since the chatRequest objects may be different instances
-				if (toolCall.chatRequest?.id === chatRequest.id) {
+				if (toolCall.chatRequest?.id === request.id) {
 					const formattedCall = ToolCallFormatter.formatToolCall(toolCall);
-					const currentCalls = this._toolCallTracking.get(chatRequest) || [];
+					const currentCalls = this._toolCallTracking.get(request) || [];
 					currentCalls.push(formattedCall);
-					this._toolCallTracking.set(chatRequest, currentCalls);
+					this._toolCallTracking.set(request, currentCalls);
 
 					console.log(`[SingleModelChatHandler] Tracked tool call for ${modelId}:`, formattedCall.displayMessage);
 
@@ -207,7 +216,7 @@ export class SingleModelChatHandler implements IDisposable {
 					this._endpointCache.set(modelCacheKey, languageModelChat);
 				}
 
-				chatRequest.model = languageModelChat;
+				request.model = languageModelChat;
 			}
 
 			// First populate the tools map with VS Code's default tool selections
@@ -224,7 +233,7 @@ export class SingleModelChatHandler implements IDisposable {
 					// Enable contributed tools (these come from VS Code's contribution system)
 					const contributedName = getContributedToolName(tool.name);
 					if (contributedName && contributedName.startsWith('copilot_')) {
-						chatRequest.tools.set(contributedName, true);
+						request.tools.set(contributedName, true);
 					}
 				}
 			});
@@ -234,20 +243,20 @@ export class SingleModelChatHandler implements IDisposable {
 			const enabledTools = await this.instantiationService.invokeFunction(async accessor => {
 				// Import the getAgentTools function from agentIntent.ts
 				const { getAgentTools } = await import('../../intents/node/agentIntent');
-				return await getAgentTools(this.instantiationService, chatRequest);
+				return await getAgentTools(this.instantiationService, request);
 			});
 
 			// Ensure all enabled tools are marked in the tools map
 			for (const tool of enabledTools) {
 				const contributedName = getContributedToolName(tool.name);
 				if (contributedName) {
-					chatRequest.tools.set(contributedName, true);
+					request.tools.set(contributedName, true);
 				}
 			}
 
 			console.log(`[SingleModelChatHandler] Enabled ${enabledTools.length} tools for ${modelId}:`, enabledTools.map((tool: any) => tool.name));
-			console.log(`[SingleModelChatHandler] Total tools in chatRequest.tools map for ${modelId}:`, chatRequest.tools.size);
-			console.log(`[SingleModelChatHandler] Tools map contents for ${modelId}:`, Array.from(chatRequest.tools.entries()));
+			console.log(`[SingleModelChatHandler] Total tools in request.tools map for ${modelId}:`, request.tools.size);
+			console.log(`[SingleModelChatHandler] Tools map contents for ${modelId}:`, Array.from(request.tools.entries()));
 
 			// Create a response stream that captures the output and tool calls
 			// Note: ChatToolInvocationPart (with detailed invocationMessage) is only created
@@ -439,6 +448,15 @@ export class SingleModelChatHandler implements IDisposable {
 
 			// PROMPT INTERCEPTION: Set up intent wrapping if needed
 			if (onPromptRendered || promptModifier || storedModification) {
+				// Store the prompt modifier and callback directly on the request object
+				// This avoids shared state issues - each request has its own modifiers
+				request.promptModifier = (messages: Raw.ChatMessage[]) => combinedPromptModifier(modelId, messages);
+				request.onPromptRendered = (messages: Raw.ChatMessage[]) => {
+					if (onPromptRendered) {
+						onPromptRendered(modelId, messages);
+					}
+				};
+
 				await this.instantiationService.invokeFunction(async accessor => {
 					const intentService = accessor.get(IIntentService);
 					agentIntent = intentService.getIntent(Intent.Agent, ChatLocation.Panel);
@@ -453,9 +471,9 @@ export class SingleModelChatHandler implements IDisposable {
 						// Always use the originally saved invoke method
 						originalInvoke = SingleModelChatHandler._originalAgentInvoke;
 
-						// Create a request-specific wrapper that captures the current modelId and storedModification
-						const requestSpecificInvoke = async (context: any) => {
-							// Call the ORIGINAL invoke (not the potentially wrapped one) to get the invocation object
+						// Create a wrapper that looks up modifiers from the request object (passed via context)
+						const requestSpecificInvoke = async (context: IIntentInvocationContext) => {
+							// Call the ORIGINAL invoke to get the invocation object
 							const invocation = await originalInvoke(context);
 
 							// Wrap the buildPrompt method to intercept prompt rendering
@@ -464,15 +482,17 @@ export class SingleModelChatHandler implements IDisposable {
 								// Call the original buildPrompt to get the rendered prompt
 								const result = await originalBuildPrompt(promptContext, progress, token);
 
-								// Notify the caller about the rendered prompt (for display/inspection)
-								if (onPromptRendered) {
-									onPromptRendered(modelId, result.messages);
+								// Look up the modifiers from the request object (from context)
+								const chatRequest = context.request as ModelComparisonChatRequest;
+
+								// Notify callback if present
+								if (chatRequest.onPromptRendered) {
+									chatRequest.onPromptRendered(result.messages);
 								}
 
-								// Allow the caller to modify the prompt before sending to the model
-								if (promptModifier || storedModification) {
-									const modifiedMessages = combinedPromptModifier(modelId, result.messages);
-									// Return a new result object with modified messages
+								// Apply modifier if present
+								if (chatRequest.promptModifier) {
+									const modifiedMessages = chatRequest.promptModifier(result.messages);
 									return {
 										...result,
 										messages: modifiedMessages
@@ -485,7 +505,7 @@ export class SingleModelChatHandler implements IDisposable {
 							return invocation;
 						};
 
-						// Temporarily replace the invoke method with our request-specific wrapper
+						// Temporarily replace the invoke method with our wrapper
 						agentIntent.invoke = requestSpecificInvoke;
 					}
 				});
@@ -495,7 +515,7 @@ export class SingleModelChatHandler implements IDisposable {
 			const requestHandler = this.instantiationService.createInstance(
 				ChatParticipantRequestHandler,
 				history,
-				chatRequest,
+				request,
 				responseStream,
 				actualCancellationToken,
 				chatAgentArgs,
@@ -511,11 +531,11 @@ export class SingleModelChatHandler implements IDisposable {
 			toolCallDisposable.dispose();
 
 			// Get the tracked tool calls for this request
-			const toolCalls = this._toolCallTracking.get(chatRequest) || [];
+			const toolCalls = this._toolCallTracking.get(request) || [];
 			console.log(`[SingleModelChatHandler] ${modelId} used ${toolCalls.length} tools:`, toolCalls.map(tc => tc.displayMessage));
 
 			// Clean up tracking map
-			this._toolCallTracking.delete(chatRequest);
+			this._toolCallTracking.delete(request);
 
 			// Call completion callback if provided
 			if (onCompletion) {
@@ -533,6 +553,12 @@ export class SingleModelChatHandler implements IDisposable {
 			// Handle any errors that occurred during processing
 			const errorMsg = error instanceof Error ? error.message : String(error);
 			console.log(`❌ [${modelId}] Error occurred:`, errorMsg);
+
+			// Clean up tracking map even on error (if chatRequest was created)
+			if (chatRequest) {
+				this._toolCallTracking.delete(chatRequest);
+			}
+
 			return {
 				response: '',
 				error: errorMsg,
