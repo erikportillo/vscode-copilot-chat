@@ -673,7 +673,7 @@ p {
 /* Tool calls section in response cards */
 .tool-calls-section {
 	margin-bottom: 12px;
-	padding: 8px;
+	padding: 0;
 	background-color: var(--vscode-editor-inactiveSelectionBackground);
 	border-radius: 6px;
 	border-left: 3px solid var(--vscode-symbolIcon-functionForeground);
@@ -683,13 +683,39 @@ p {
 	font-weight: 600;
 	font-size: 12px;
 	color: var(--vscode-symbolIcon-functionForeground);
-	margin-bottom: 8px;
+	padding: 8px;
+	cursor: pointer;
+	user-select: none;
+	transition: background-color 0.1s ease;
+	border-radius: 6px;
+	list-style: none;
+}
+
+.tool-calls-header::-webkit-details-marker {
+	display: none;
+}
+
+.tool-calls-header::before {
+	content: '▶';
+	display: inline-block;
+	margin-right: 6px;
+	transition: transform 0.2s ease;
+	font-size: 10px;
+}
+
+.tool-calls-section[open] > .tool-calls-header::before {
+	transform: rotate(90deg);
+}
+
+.tool-calls-header:hover {
+	background-color: var(--vscode-list-hoverBackground);
 }
 
 .tool-calls-list {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
+	padding: 0 8px 8px 8px;
 }
 
 .tool-call-item {

@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Raw } from '@vscode/prompt-tsx';
-import type { ChatPromptReference, ChatRequest, ExtendedChatResponsePart } from 'vscode';
+import { Location, type ChatPromptReference, type ChatRequest, type ExtendedChatResponsePart } from 'vscode';
 import { getChatParticipantIdFromName } from '../../../platform/chat/common/chatAgents';
 import { IRequestLogger } from '../../../platform/requestLogger/node/requestLogger';
+import { ITabsAndEditorsService } from '../../../platform/tabs/common/tabsAndEditorsService';
 import { ChatResponseStreamImpl } from '../../../util/common/chatResponseStreamImpl';
 import { CancellationToken } from '../../../util/vs/base/common/cancellation';
 import { Event } from '../../../util/vs/base/common/event';
@@ -44,9 +45,10 @@ class ModelComparisonChatRequest implements ChatRequest {
 	public sessionId = generateUuid();
 
 	constructor(
-		public prompt: string
+		public prompt: string,
+		references: readonly ChatPromptReference[] = []
 	) {
-		this.references = [];
+		this.references = references;
 		this.location = ChatLocation.Panel;
 		this.attempt = 0;
 		this.enableCommandDetection = false;
@@ -70,6 +72,41 @@ export class SingleModelChatHandler implements IDisposable {
 	) { }
 
 	/**
+	 * Gather context from the active editor (open file and selection)
+	 * This mimics what the chat panel does with implicit context
+	 */
+	private gatherEditorContext(): ChatPromptReference[] {
+		return this.instantiationService.invokeFunction(accessor => {
+			const tabsAndEditorsService = accessor.get<ITabsAndEditorsService>(ITabsAndEditorsService);
+			const activeTextEditor = tabsAndEditorsService.activeTextEditor;
+			const references: ChatPromptReference[] = [];
+
+			if (activeTextEditor) {
+				const selection = activeTextEditor.selection;
+				if (selection && !selection.isEmpty) {
+					// Add the selection as a reference (similar to #selection variable)
+					references.push({
+						id: 'vscode.implicit',
+						name: `file:${activeTextEditor.document.uri.path}`,
+						value: new Location(activeTextEditor.document.uri, selection),
+						modelDescription: `User's active selection`
+					} as ChatPromptReference);
+				} else {
+					// Add the whole file if no selection
+					references.push({
+						id: 'vscode.implicit',
+						name: `file:${activeTextEditor.document.uri.path}`,
+						value: activeTextEditor.document.uri,
+						modelDescription: `User's active file`
+					} as ChatPromptReference);
+				}
+			}
+
+			return references;
+		});
+	}
+
+	/**
 	 * Send a chat message to a single model and get the response
 	 * @param modelId The model to use for the chat request
 	 * @param message The user's message
@@ -82,6 +119,8 @@ export class SingleModelChatHandler implements IDisposable {
 	 * @param onToolCall Optional callback when a tool call is detected
 	 * @param onPromptRendered Optional callback when the prompt is rendered (before sending to model)
 	 * @param promptModifier Optional function to modify the prompt messages before sending
+	 * @param includeEditorContext Whether to include open file/selection as context (default: false)
+	 * @param additionalReferences Additional ChatPromptReferences to include as context
 	 * @returns Promise that resolves when the response is complete
 	 */
 	async sendChatMessage(
@@ -95,7 +134,9 @@ export class SingleModelChatHandler implements IDisposable {
 		onCompletion?: (modelId: string) => void,
 		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void,
 		onPromptRendered?: (modelId: string, messages: Raw.ChatMessage[]) => void,
-		promptModifier?: (modelId: string, messages: Raw.ChatMessage[]) => Raw.ChatMessage[]
+		promptModifier?: (modelId: string, messages: Raw.ChatMessage[]) => Raw.ChatMessage[],
+		includeEditorContext: boolean = false,
+		additionalReferences: ChatPromptReference[] = []
 	): Promise<{ response: string; error?: string; toolCalls?: IFormattedToolCall[] }> {
 
 		if (this._isDisposed) {
@@ -107,8 +148,14 @@ export class SingleModelChatHandler implements IDisposable {
 		let agentIntent: any = null;
 
 		try {
+			// Gather context from editor if requested
+			const editorContext = includeEditorContext ? this.gatherEditorContext() : [];
+
+			// Merge all references: editor context + additional references
+			const allReferences = [...editorContext, ...additionalReferences];
+
 			// Create a proper ChatRequest for the model comparison
-			const chatRequest = new ModelComparisonChatRequest(message);
+			const chatRequest = new ModelComparisonChatRequest(message, allReferences);
 
 			// Initialize tool call tracking for this request
 			this._toolCallTracking.set(chatRequest, []);

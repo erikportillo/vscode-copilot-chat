@@ -188,7 +188,9 @@
 		isPreviewVisible: false,
 		toolCallPreviews: [],
 		canApprove: false,
-		canCancel: false
+		canCancel: false,
+		// Track which tool call sections are open (by message ID and model ID)
+		openSections: new Map() // key: `${messageId}-${modelId}`, value: boolean
 	};
 
 	/**
@@ -632,9 +634,26 @@
 	}
 
 	/**
+	 * Capture the current state of tool call sections (open/closed)
+	 */
+	function captureToolCallSectionStates() {
+		const sections = document.querySelectorAll('.tool-calls-section');
+		sections.forEach(section => {
+			const messageId = section.getAttribute('data-message-id');
+			const modelId = section.getAttribute('data-model-id');
+			if (messageId && modelId) {
+				const key = `${messageId}-${modelId}`;
+				toolCallState.openSections.set(key, section.open);
+			}
+		});
+	}
+
+	/**
 	 * Update the chat UI
 	 */
 	function updateChatUI() {
+		// Capture current state before re-rendering
+		captureToolCallSectionStates();
 		renderChatMessages();
 		updateSendButton();
 	}
@@ -767,10 +786,18 @@
 
 			// Show tool calls if available
 			if (toolCalls && toolCalls.length > 0) {
-				const toolCallsSection = document.createElement('div');
+				const toolCallsSection = document.createElement('details');
 				toolCallsSection.className = 'tool-calls-section';
 
-				const toolCallsHeader = document.createElement('div');
+				// Add data attributes to track this section
+				toolCallsSection.setAttribute('data-message-id', message.id);
+				toolCallsSection.setAttribute('data-model-id', modelId);
+
+				// Restore previous state or default to closed
+				const stateKey = `${message.id}-${modelId}`;
+				toolCallsSection.open = toolCallState.openSections.get(stateKey) || false;
+
+				const toolCallsHeader = document.createElement('summary');
 				toolCallsHeader.className = 'tool-calls-header';
 				toolCallsHeader.textContent = `🔧 ${toolCalls.length} Tool${toolCalls.length === 1 ? '' : 's'} Called`;
 

@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { type ChatPromptReference } from 'vscode';
 import { CancellationToken, CancellationTokenSource } from '../../../util/vs/base/common/cancellation';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
@@ -119,6 +120,9 @@ export class ComparisonChatOrchestrator extends Disposable {
 	 * @param cancellationToken Cancellation token
 	 * @param onProgress Optional streaming progress callback (modelId, chunk) => void
 	 * @param modelMetadataMap Optional map of model metadata for enhanced routing
+	 * @param onToolCall Optional callback when a tool call is detected
+	 * @param includeEditorContext Whether to include active editor context (default: false)
+	 * @param additionalReferences Additional ChatPromptReferences to include as context
 	 * @returns Promise resolving to array of model responses with timing and error info
 	 */
 	async sendChatMessageToMultipleModels(
@@ -128,7 +132,9 @@ export class ComparisonChatOrchestrator extends Disposable {
 		cancellationToken: CancellationToken,
 		onProgress?: StreamingProgressCallback,
 		modelMetadataMap?: Map<string, { id: string; name: string; family?: string; version?: string; vendor?: string }>,
-		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void
+		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void,
+		includeEditorContext: boolean = false,
+		additionalReferences: ChatPromptReference[] = []
 	): Promise<ModelChatResponse[]> {
 		if (modelIds.length === 0) {
 			return [];
@@ -215,7 +221,9 @@ export class ComparisonChatOrchestrator extends Disposable {
 				modelMetadata,
 				modelDeltaCallback,
 				modelCompletionCallback,
-				onToolCall
+				onToolCall,
+				includeEditorContext,
+				additionalReferences
 			);
 
 			chatPromises.push(chatPromise);
@@ -262,7 +270,9 @@ export class ComparisonChatOrchestrator extends Disposable {
 		modelMetadata?: { id: string; name: string; family?: string; version?: string; vendor?: string },
 		onDelta?: (modelId: string, text: string, delta: any) => void,
 		onCompletion?: (modelId: string) => void,
-		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void
+		onToolCall?: (modelId: string, toolCall: IFormattedToolCall) => void,
+		includeEditorContext: boolean = false,
+		additionalReferences: ChatPromptReference[] = []
 	): Promise<ModelChatResponse> {
 
 		const timestamp = Date.now();
@@ -277,7 +287,11 @@ export class ComparisonChatOrchestrator extends Disposable {
 				modelMetadata,
 				onDelta,
 				onCompletion,
-				onToolCall
+				onToolCall,
+				undefined, // onPromptRendered
+				undefined, // promptModifier
+				includeEditorContext,
+				additionalReferences
 			);
 
 			return {

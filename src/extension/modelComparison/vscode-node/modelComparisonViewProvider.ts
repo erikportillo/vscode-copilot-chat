@@ -632,7 +632,8 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 									}
 								});
 							}
-						}
+						},
+						true  // includeEditorContext - automatically include active editor/selection as context
 					);
 
 					// Update aggregation with all responses
