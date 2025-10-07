@@ -182,6 +182,58 @@
 	};
 
 	/**
+	 * Save the current state to VS Code's webview state
+	 */
+	function saveState() {
+		try {
+			const state = {
+				chatMessages: chatState.messages,
+				toolCallOpenSections: Array.from(toolCallState.openSections.entries()),
+				modifiedModels: Array.from(promptEditorState.modifiedModels)
+			};
+			vscode.setState(state);
+		} catch (error) {
+			console.error('Failed to save state:', error);
+		}
+	}
+
+	/**
+	 * Restore state from VS Code's webview state
+	 */
+	function restoreState() {
+		try {
+			const state = vscode.getState();
+			if (state) {
+				// Restore chat messages
+				if (state.chatMessages && Array.isArray(state.chatMessages)) {
+					chatState.messages = state.chatMessages;
+					// Clear any streaming state from restored messages
+					chatState.messages.forEach(msg => {
+						if (msg.type === 'assistant') {
+							msg.isStreaming = false;
+							delete msg.streamingResponses;
+						}
+					});
+				}
+
+				// Restore tool call open sections
+				if (state.toolCallOpenSections && Array.isArray(state.toolCallOpenSections)) {
+					toolCallState.openSections = new Map(state.toolCallOpenSections);
+				}
+
+				// Restore modified models set
+				if (state.modifiedModels && Array.isArray(state.modifiedModels)) {
+					promptEditorState.modifiedModels = new Set(state.modifiedModels);
+				}
+
+				console.log(`🔄 Restored state: ${chatState.messages.length} messages`);
+			}
+		} catch (error) {
+			console.error('Failed to restore state:', error);
+		}
+	}
+
+	/**
 	 * State management for tool calls
 	 */
 	const toolCallState = {
@@ -536,6 +588,7 @@
 			};
 
 			chatState.messages.push(assistantMessage);
+			saveState(); // Save state after adding messages
 			updateChatUI();
 
 			// Send message to extension and get responses
@@ -550,6 +603,7 @@
 			assistantMessage.timestamp = response.timestamp;
 			assistantMessage.toolCalls = response.toolCalls; // Add tool calls to message
 			assistantMessage.isStreaming = false;
+			saveState(); // Save state after updating message
 
 		} catch (error) {
 			console.error('Failed to send chat message:', error);
@@ -565,6 +619,7 @@
 	 */
 	function clearChat() {
 		chatState.messages = [];
+		saveState(); // Save state after clearing
 		updateChatUI();
 	}
 
@@ -646,6 +701,7 @@
 				toolCallState.openSections.set(key, section.open);
 			}
 		});
+		saveState(); // Save state when tool call sections change
 	}
 
 	/**
@@ -952,6 +1008,7 @@
 	function updateSendButton() {
 		const sendButton = document.getElementById('send-button');
 		const stopButton = document.getElementById('stop-button');
+		const clearChatButton = document.getElementById('clear-chat-button');
 
 		if (sendButton) {
 			// Send button is always enabled when models are selected
@@ -961,6 +1018,11 @@
 		if (stopButton) {
 			// Stop button only visible when actively loading
 			stopButton.style.display = chatState.isLoading ? 'flex' : 'none';
+		}
+
+		if (clearChatButton) {
+			// Clear chat button only visible when there are messages and not currently loading
+			clearChatButton.style.display = (chatState.messages.length > 0 && !chatState.isLoading) ? 'flex' : 'none';
 		}
 	}
 
@@ -1333,6 +1395,7 @@
 			} else {
 				promptEditorState.modifiedModels.delete(modelId);
 			}
+			saveState(); // Save state when prompt modifications change
 
 			// Update the edit button to show modification status
 			updateEditButtonState(modelId, hasModification);
@@ -1420,6 +1483,7 @@
 				console.error(`Failed to load modification status for ${modelId}:`, error);
 			}
 		}
+		saveState(); // Save state after loading modifications
 	}
 
 	/**
@@ -1427,6 +1491,9 @@
 	 */
 	async function init() {
 		console.log('🚀 Model Comparison initialized');
+
+		// Restore state from previous session
+		restoreState();
 
 		// Set up event listeners for control buttons
 		const resetButton = document.getElementById('reset-selection');
@@ -1456,6 +1523,17 @@
 		const chatInput = document.getElementById('chat-input');
 		const sendButton = document.getElementById('send-button');
 		const stopButton = document.getElementById('stop-button');
+		const clearChatButton = document.getElementById('clear-chat-button');
+
+		if (clearChatButton) {
+			clearChatButton.onclick = () => {
+				// Show confirmation before clearing
+				if (chatState.messages.length > 0) {
+					// Clear chat without confirmation for better UX
+					clearChat();
+				}
+			};
+		}
 
 		if (sendButton) {
 			sendButton.onclick = () => {

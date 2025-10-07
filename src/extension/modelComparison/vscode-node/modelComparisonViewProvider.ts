@@ -159,6 +159,11 @@ export class ModelComparisonViewProvider extends Disposable implements vscode.We
 						<div class="chat-input-container">
 							<textarea id="chat-input" placeholder="Type your message here..." rows="2"></textarea>
 							<div class="chat-actions">
+								<button id="clear-chat-button" class="icon-button clear-chat-button" title="Clear all chat messages" style="display: none;">
+									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+										<path d="M10 3h3v1h-1v9l-1 1H4l-1-1V4H2V3h3V2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1zM9 2H6v1h3V2zM4 13h7V4H4v9zm2-8H5v7h1V5zm1 0h1v7H7V5zm2 0h1v7H9V5z"/>
+									</svg>
+								</button>
 								<button id="approve-tools-global" class="icon-button approve-button" title="Approve all tool calls" style="display: none;">
 									<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
 										<path d="M6.5 12L2 7.5l1.5-1.5L6.5 9l6-6L14 4.5z"/>
