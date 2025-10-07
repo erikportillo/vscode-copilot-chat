@@ -3867,7 +3867,9 @@
 					"id": "context-inspector",
 					"title": "Language Context Inspector",
 					"icon": "$(inspect)"
-				},
+				}
+			],
+			"panel": [
 				{
 					"id": "model-comparison",
 					"title": "Model Comparison",
