@@ -402,7 +402,7 @@ function generateMockResponse(model: string, message: string): string {
 
 ## Phase 4: Advanced Comparison Features
 
-### TASK 8: Response Quality Analysis
+### [DEFERRED] TASK 8: Response Quality Analysis
 **Objective**: Provide tools for analyzing and comparing response quality
 
 **Prerequisites**: Task 7 must be completed and tested
@@ -433,7 +433,7 @@ function generateMockResponse(model: string, message: string): string {
 
 ---
 
-### TASK 9: Context and Prompt Verification
+### [NOT-DOING] TASK 9: Context and Prompt Verification
 **Objective**: Verify identical context and prompt construction across models
 
 **Prerequisites**: Task 8 must be completed and tested
@@ -463,7 +463,7 @@ function generateMockResponse(model: string, message: string): string {
 
 ---
 
-### TASK 10: Performance and Token Analysis
+### [DEFERRED] TASK 10: Performance and Token Analysis
 **Objective**: Compare model performance metrics and token usage
 
 **Prerequisites**: Task 9 must be completed and tested
@@ -495,7 +495,7 @@ function generateMockResponse(model: string, message: string): string {
 
 ## Phase 5: Integration and Polish
 
-### TASK 11: Settings and Configuration UI
+### [DEFERRED] TASK 11: Settings and Configuration UI
 **Objective**: Create comprehensive settings for the comparison panel
 
 **Prerequisites**: Task 10 must be completed and tested
